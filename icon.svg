@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#b98a55"/>
+  <rect x="36" y="36" width="440" height="380" rx="28" fill="#2f5d4a"/>
+  <g fill="none" stroke="#fffdf8" stroke-width="26" stroke-linecap="round">
+    <path d="M110 140h84M152 98v84"/>
+    <path d="M318 140h84"/>
+    <path d="M112 262l70 70M182 262l-70 70"/>
+    <path d="M318 300h84"/>
+  </g>
+  <circle cx="360" cy="262" r="14" fill="#fffdf8"/><circle cx="360" cy="338" r="14" fill="#fffdf8"/>
+  <rect x="300" y="438" width="150" height="34" rx="17" fill="#f4c430"/>
+  <text x="72" y="470" font-family="Apple SD Gothic Neo, Noto Sans KR, sans-serif" font-size="52" font-weight="800" fill="#2b2a26">힐스</text>
+</svg>
