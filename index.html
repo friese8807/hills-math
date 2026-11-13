@@ -2,132 +2,52 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>힐스초등수학</title>
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="힐스수학">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#2f5d4a">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
 <style>
-  /* 앱 화면(style)이 오기 전 로딩·로그인 화면 */
-  .boot { min-height: 100vh; display: grid; place-items: center; padding: 1.5rem; background: #fbf7ee; color: #2b2a26;
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #fbf7ee; color: #2b2a26;
     font: 16px/1.5 -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; text-align: center; }
-  .boot img { width: 84px; height: 84px; border-radius: 20px; }
-  .boot h1 { font-size: 1.3rem; margin: .6rem 0 1rem; }
-  .boot form { width: 100%; max-width: 340px; text-align: left; }
-  .boot label { display: block; margin-bottom: .8rem; font-size: .9rem; color: #7a7366; }
-  .boot input, .boot select { width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: .65rem .7rem; margin-top: .25rem;
-    border: 1px solid #ece4d3; border-radius: 10px; background: #fffdf8; color: #2b2a26; }
-  .boot button { width: 100%; padding: .8rem; border: 0; border-radius: 12px; background: #2f7a5b; color: #fff; font: inherit; font-weight: 700; }
-  .boot .err { color: #d2493f; min-height: 1.5em; margin: .3rem 0 .6rem; font-size: .9rem; }
-  .boot .muted { color: #7a7366; font-size: .85rem; }
-  .boot[hidden] { display: none; }
+  .ico { width: 96px; height: 96px; border-radius: 22px; }
+  .warn { color: #d2493f; font-size: .9rem; max-width: 20rem; margin: 1rem auto 0; }
+  a { display: inline-block; margin-top: 1rem; padding: .8rem 1.4rem; border-radius: 12px; background: #2f7a5b; color: #fff;
+    text-decoration: none; font-weight: 700; }
 </style>
 </head>
 <body>
-<div id="boot" class="boot"><div><img src="icon-180.png" alt=""><h1>힐스초등수학</h1><p class="muted">불러오는 중…</p></div></div>
-<div id="shell" hidden>
-<header class="top">
-  <a class="brand" href="#" data-go="home"><img class="logo-svg" src="icon-180.png" width="30" height="30" alt=""><span id="brand-name">힐스초등수학</span></a>
-  <button class="icon-btn" type="button" data-act="reload" aria-label="새로고침">↻</button>
-</header>
-<nav class="tabs" id="tabs"></nav>
-<nav class="bnav" id="bnav" aria-label="메뉴"></nav>
-<div class="more-sheet" id="more" hidden></div>
-<main id="main"><p class="muted">불러오는 중…</p></main>
-<div id="busy" class="busy" hidden><span>저장 중…</span></div>
-<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-</div>
+<main>
+  <svg class="ico" role="img" aria-label="힐스초등수학 아이콘" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#b98a55"/>
+  <rect x="36" y="36" width="440" height="380" rx="28" fill="#2f5d4a"/>
+  <g fill="none" stroke="#fffdf8" stroke-width="26" stroke-linecap="round">
+    <path d="M110 140h84M152 98v84"/>
+    <path d="M318 140h84"/>
+    <path d="M112 262l70 70M182 262l-70 70"/>
+    <path d="M318 300h84"/>
+  </g>
+  <circle cx="360" cy="262" r="14" fill="#fffdf8"/><circle cx="360" cy="338" r="14" fill="#fffdf8"/>
+  <rect x="300" y="438" width="150" height="34" rx="17" fill="#f4c430"/>
+  <text x="72" y="470" font-family="Apple SD Gothic Neo, Noto Sans KR, sans-serif" font-size="52" font-weight="800" fill="#2b2a26">힐스</text>
+</svg>
+  <h1>힐스초등수학</h1>
+  <a id="go" href="#">앱 열기</a>
+  <p class="warn" id="warn" hidden></p>
+</main>
 <script>
-'use strict';
-// Apps Script 'API' 배포 주소 (…/exec). '나'로 실행 + '모든 사용자' 배포여야 한다.
-const API_URL = 'https://script.google.com/macros/s/AKfycbxNV4BAh9xyHbRgFFBX6iIkw6vbXinVchicZt--G03Duos49Y8WCQJGp5FHEmXtnmwl/exec';
-const KEY = 'hills.token', DEV = 'hills.device';
-
-function store(k, v) { try { if (v === undefined) return localStorage.getItem(k) || ''; if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { return ''; } }
-
-async function api(fn, args) {
-  const r = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ token: store(KEY), device: store(DEV), fn, args: args || [] }) });
-  const j = await r.json();
-  if (!j.ok) {
-    if (/비밀번호가 맞지 않/.test(j.error)) { store(KEY, null); showLogin(j.error); }
-    throw new Error(j.error);
-  }
-  return j.res;
-}
-
-// 앱 코드(app)는 google.script.run / google.script.history 를 쓴다. 같은 모양으로 흉내 낸다.
-function runner(ok, fail) {
-  return new Proxy({}, { get(_, name) {
-    if (name === 'withSuccessHandler') return f => runner(f, fail);
-    if (name === 'withFailureHandler') return f => runner(ok, f);
-    return (...args) => { api(name, args).then(r => ok && ok(r), e => fail ? fail(e) : console.error(e)); };
-  } });
-}
-let onHistory = null;
-window.google = { script: {
-  run: runner(),
-  history: {
-    push(state) { history.pushState(state, ''); },
-    replace(state) { history.replaceState(state, ''); },
-    setChangeHandler(f) { onHistory = f; },
-  },
-} };
-addEventListener('popstate', e => { if (onHistory) onHistory({ state: e.state }); });
-
-function esc(s) { return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
-
-function showLogin(msg) {
-  document.getElementById('shell').hidden = true;
-  const box = document.getElementById('boot');
-  box.hidden = false;
-  const dev = store(DEV);
-  box.innerHTML = '<form id="login"><div style="text-align:center"><img src="icon-180.png" alt=""><h1>힐스초등수학</h1></div>' +
-    '<label>이 휴대폰 이름<select name="device">' + ['아빠 폰', '엄마 폰', '아빠 PC', '엄마 PC', '기타']
-      .map(d => '<option' + (d === dev ? ' selected' : '') + '>' + d + '</option>').join('') + '</select></label>' +
-    '<label>비밀번호<input name="token" type="password" autocomplete="current-password" required></label>' +
-    '<p class="err">' + esc(msg) + '</p><button>들어가기</button>' +
-    '<p class="muted">처음 한 번만 넣으면 이 휴대폰에 기억됩니다.</p></form>';
-  document.getElementById('login').onsubmit = e => {
-    e.preventDefault();
-    const f = e.target;
-    store(DEV, f.device.value);
-    store(KEY, f.token.value.trim());
-    start();
-  };
-}
-
-async function start() {
-  if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(API_URL)) {
-    document.getElementById('boot').innerHTML = '<p class="err">API 주소가 아직 들어 있지 않습니다.</p>'; return;
-  }
-  if (!store(KEY)) { showLogin(''); return; }
-  const box = document.getElementById('boot');
-  box.innerHTML = '<div><img src="icon-180.png" alt=""><h1>힐스초등수학</h1><p class="muted">불러오는 중…</p></div>';
-  let b;
-  try { b = await api('boot'); } catch (e) {
-    if (store(KEY)) box.innerHTML = '<div><p class="err">' + esc(e.message) + '</p><button onclick="start()">다시 시도</button></div>';
-    return;
-  }
-  // 서버의 style·app 을 붙인다 (화면 수정은 Apps Script 배포만으로 반영된다)
-  const tpl = document.createElement('template');
-  tpl.innerHTML = b.style;
-  document.head.appendChild(tpl.content);
-  window.BOOT = b.data;
-  box.hidden = true;
-  document.getElementById('shell').hidden = false;
-  const code = b.app.replace(/^\s*<script>/, '').replace(/<\/script>\s*$/, '');
-  const s = document.createElement('script');
-  s.textContent = code;
-  document.body.appendChild(s);
-}
-start();
+  // 아래 주소를 Apps Script '웹 앱 URL'(…/exec)로 바꾸세요.
+  const APP_URL = 'https://script.google.com/macros/s/AKfycbxNV4BAh9xyHbRgFFBX6iIkw6vbXinVchicZt--G03Duos49Y8WCQJGp5FHEmXtnmwl/exec';
+  const ok = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+|macros)\/s\/[\w-]+\/exec$/.test(APP_URL.trim());
+  document.getElementById('go').href = ok ? APP_URL.trim() : '#';
+  const warn = document.getElementById('warn');
+  if (!ok) { warn.hidden = false; warn.textContent = 'index.html 의 APP_URL 에 웹 앱 주소(https://script.google.com/…/exec)가 아직 들어가지 않았어요.'; }
+  else if (location.hash === '#add') { warn.hidden = false; warn.textContent = '지금 공유 → 홈 화면에 추가를 누르세요. 추가한 아이콘으로 열면 앱으로 바로 넘어갑니다.'; }
+  // 홈 화면에 추가하는 중에는 넘어가지 않도록 '#add' 로 열면 멈춘다
+  if (ok && location.hash !== '#add') location.replace(APP_URL.trim());
 </script>
 </body>
 </html>
