@@ -1,0 +1,875 @@
+<script>
+'use strict';
+// ================= 상태 · 공통 =================
+let D = BOOT;
+let S = { view: 'home', p: {} };
+const COUNTED = new Set(['출석', '지각', '조퇴', '보강']);
+const HW = [['완료', '✔ 했음'], ['일부', '△ 일부'], ['안함', '✖ 안함'], ['', '-']];
+const WD = '일월화수목금토';
+const TABS = [['home', '홈'], ['check', '출석체크'], ['book', '출석부'], ['makeups', '보강'], ['students', '학생'],
+  ['tuition', '수강료'], ['money', '지출·결산'], ['settings', '설정']];
+
+const BNAV = [['home', '🏠', '홈'], ['check', '✅', '출석'], ['makeups', '🔁', '보강'], ['students', '👧', '학생'], ['tuition', '💳', '수강료']];
+const h = v => String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const won = n => Number(n || 0).toLocaleString('ko-KR') + '원';
+const iso = x => x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0');
+const dt = d => new Date(d + 'T00:00:00');
+const wd = d => d ? WD[dt(d).getDay()] : '';
+const addDays = (d, n) => { const x = dt(d); x.setDate(x.getDate() + n); return iso(x); };
+const md = d => d ? (+d.slice(5, 7)) + '/' + (+d.slice(8, 10)) : '';
+const mdw = d => d ? md(d) + '(' + wd(d) + ')' : '';
+const monthShift = (m, n) => { const x = new Date(+m.slice(0, 4), +m.slice(5, 7) - 1 + n, 1); return iso(x).slice(0, 7); };
+const thisMonth = () => D.today.slice(0, 7);
+const stu = id => D.students.find(s => s.id === +id) || { name: '(삭제됨)', id: 0 };
+const cls = id => D.classes.find(c => c.id === +id);
+const clsName = id => (cls(id) || {}).name || '';
+const active = () => D.students.filter(s => s.status === '재원');
+// 성별·학년 표시: 남=파랑, 여=분홍, 학년마다 다른 색
+const gradeNum = s => { const m = String(s.grade || '').match(/[1-6]/); return m ? m[0] : ''; };
+const sxc = s => s.gender === '남' ? 'm' : s.gender === '여' ? 'f' : 'u';
+const sx = s => s.gender ? `<span class="sx ${sxc(s)}">${s.gender}</span>` : '';
+const gr = s => { const n = gradeNum(s); return n ? `<span class="gr g${n}">${n}학년</span>` : s.grade ? `<span class="gr">${h(s.grade)}</span>` : '<span class="gr none">학년?</span>'; };
+// 학년 세로 막대: 6칸 중 학년만큼 아래부터 채운다
+const gbar = (s, big) => { const n = +gradeNum(s); return `<span class="gb${big ? ' big' : ''} ${n ? 'g' + n : ''}" aria-hidden="true">${[6, 5, 4, 3, 2, 1].map(i => `<i${i <= n ? ' class="on"' : ''}></i>`).join('')}</span>`; };
+// 이름 앞 작은 숫자 타일 (모든 화면 공통)
+const gt = s => { const n = gradeNum(s); return `<span class="gt ${n ? 'g' + n : 'none'}" title="${n ? n + '학년' : '학년 미정'}">${n || '?'}</span>`; };
+const tags = s => sx(s);
+const sortStudents = list => list.slice().sort((a, b) => (a.class_id || 999) - (b.class_id || 999) || a.id - b.id);
+const options = (list, cur) => list.map(x => {
+  const [v, t] = Array.isArray(x) ? x : [x, x];
+  return `<option value="${h(v)}" ${String(v) === String(cur) ? 'selected' : ''}>${h(t)}</option>`;
+}).join('');
+
+function counted(sid) {
+  return D.attendance.filter(a => a.student_id === sid && COUNTED.has(a.status)).map(a => a.date).sort();
+}
+// 종이 출석부의 '현재 줄': 회차제는 몇 번째 묶음의 몇 회째, 월정액은 이번 달 출석 날짜
+function cyc(st) {
+  if (st.billing !== '회차제') {
+    const cells = counted(st.id).filter(d => d.startsWith(thisMonth()));
+    return { monthly: true, cells, size: cells.length, used: cells.length };
+  }
+  const size = Math.max(1, st.cycle_size || 8), off = Math.max(0, st.cycle_offset || 0);
+  const ds = counted(st.id), total = off + ds.length;
+  const cycle = total ? Math.floor((total - 1) / size) + 1 : 1;
+  const start = (cycle - 1) * size;
+  return { monthly: false, cycle, size, used: total - start, cells: ds.filter((d, i) => off + i >= start), complete: total - start >= size };
+}
+const billLabel = b => b.cycle > 0 ? `${b.cycle}차 회차` : `${+b.month.slice(5)}월분`;
+const openMk = sid => D.makeups.filter(m => m.student_id === sid && (m.status === '대기' || m.status === '예정'));
+
+// ================= 서버 호출 =================
+const loader = t => `<div class="ld"><div class="ld-board" aria-hidden="true"><i>+</i><i>−</i><i>×</i><i>÷</i></div><b>${t}</b></div>`;
+document.getElementById('busy').innerHTML = loader('저장 중…');
+function call(fn, ...args) {
+  const busy = document.getElementById('busy');
+  busy.hidden = false;
+  return new Promise((resolve, reject) => {
+    google.script.run
+      .withSuccessHandler(res => {
+        busy.hidden = true;
+        if (res && res.data) D = res.data;
+        render();
+        toast(res && res.msg);
+        resolve(res);
+      })
+      .withFailureHandler(err => {
+        busy.hidden = true;
+        toast(String((err && err.message) || err).replace(/^Error:\s*/, ''), true);
+        reject(err);
+      })[fn](...args);
+  });
+}
+let toastTimer;
+function toast(msg, err) {
+  if (!msg) return;
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast' + (err ? ' err' : '');
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, err ? 5000 : 2200);
+}
+
+// ================= 화면 전환 =================
+const UI_VER = '11-21b';
+const MAIN = document.getElementById('main');
+// index.html 이 예전 것이어도 동작하도록, 앱 상자(#app)가 없으면 여기서 만든다
+let APP = document.getElementById('app');
+if (!APP) {
+  APP = document.createElement('div'); APP.id = 'app';
+  MAIN.parentNode.insertBefore(APP, MAIN);
+  ['.top', '#tabs', '#bnav', '#more', '#main'].forEach(q => { const el = document.querySelector(q); if (el) APP.appendChild(el); });
+}
+// 아이폰에서 구글 화면이 실제 화면보다 크게 잡혀도 앱 높이를 보이는 화면에 맞춘다
+const fitApp = () => { if (innerWidth <= 640) APP.style.height = (window.visualViewport ? visualViewport.height : innerHeight) + 'px'; };
+fitApp(); addEventListener('resize', fitApp); if (window.visualViewport) visualViewport.addEventListener('resize', fitApp);
+const ORDER = BNAV.map(b => b[0]);
+let formDirty = false;  // 저장 안 한 입력이 있으면 스와이프 이동 전에 물어본다
+function go(view, p, replace) {
+  const from = ORDER.indexOf(S.view), to = ORDER.indexOf(view);
+  S = { view, p: p || {} };
+  try { google.script.history[replace ? 'replace' : 'push'](S, null, view); } catch (e) { /* 미리보기 등 */ }
+  render();
+  MAIN.scrollTop = 0;
+  window.scrollTo(0, 0);
+  if (from >= 0 && to >= 0 && from !== to) slideIn(to > from ? 1 : -1);
+}
+// 새 화면이 옆에서 미끄러져 들어온다
+function slideIn(dir) {
+  MAIN.style.transition = 'none';
+  MAIN.style.transform = `translateX(${dir * 40}%)`;
+  MAIN.style.opacity = '0';
+  void MAIN.offsetWidth;
+  MAIN.style.transition = 'transform .24s cubic-bezier(.2,.8,.2,1), opacity .2s';
+  MAIN.style.transform = '';
+  MAIN.style.opacity = '';
+}
+function render() {
+  document.getElementById('brand-name').textContent = D.settings.academy;
+  const tab = { student: 'students', studentEdit: 'students', feeSheet: 'students', message: 'students', mksheet: 'makeups' }[S.view] || S.view;
+  document.getElementById('tabs').innerHTML = TABS.map(([v, t]) =>
+    `<a href="#" data-go="${v}" class="${tab === v ? 'on' : ''}">${t}</a>`).join('');
+  // 휴대폰: 자주 쓰는 5개는 아래 탭바, 나머지는 '더보기'
+  const moreTabs = ['book', 'money', 'settings'];
+  document.getElementById('bnav').innerHTML = BNAV.map(([v, ic, t]) =>
+    `<a href="#" data-go="${v}" class="${tab === v ? 'on' : ''}"><span aria-hidden="true">${ic}</span>${t}</a>`).join('') +
+    `<a href="#" data-act="more" class="${moreTabs.includes(tab) ? 'on' : ''}"><span aria-hidden="true">☰</span>더보기</a>`;
+  document.getElementById('more').hidden = true;
+  MAIN.innerHTML = (VIEWS[S.view] || VIEWS.home)(S.p);
+  formDirty = false;
+  MAIN.querySelectorAll('.seg input[type=radio]:checked').forEach(x => { x.dataset.on = '1'; });
+}
+
+// ================= 화면들 =================
+const VIEWS = {};
+
+// ---------- 홈 ----------
+VIEWS.home = () => {
+  const t = D.today, m = thisMonth();
+  const income = D.tuition.filter(b => b.paid_date && b.paid_date.startsWith(m)).reduce((a, b) => a + b.amount, 0);
+  const unpaid = D.tuition.filter(b => !b.paid_date && stu(b.student_id).id).sort((a, b) => a.month < b.month ? -1 : 1);
+  const mkOpen = D.makeups.filter(x => x.status === '대기' || x.status === '예정');
+  const todayCls = D.classes.filter(c => c.active && c.days.split(',').includes(wd(t)));
+  const planned = D.makeups.filter(x => x.status === '예정' && x.plan_date === t);
+  const wait = D.makeups.filter(x => x.status === '대기');
+  return `<h1>${+t.slice(5, 7)}월 ${+t.slice(8)}일 (${wd(t)})</h1>
+  <div class="stats">
+    <a class="stat" href="#" data-go="students"><span>재원생</span><b>${active().length}명</b></a>
+    <a class="stat" href="#" data-go="tuition"><span>${+m.slice(5)}월 수납</span><b>${won(income)}</b></a>
+    <a class="stat ${unpaid.length ? 'warn' : ''}" href="#" data-go="tuition"><span>미납</span><b>${unpaid.length}건</b></a>
+    <a class="stat ${wait.length ? 'warn' : ''}" href="#" data-go="makeups"><span>보강 남음</span><b>${mkOpen.length}건</b></a>
+  </div>
+  <section class="card"><h2>오늘 수업</h2>
+    ${todayCls.map(c => {
+      const mem = active().filter(s => s.class_id === c.id);
+      const n = D.attendance.filter(a => a.class_id === c.id && a.date === t).length;
+      return `<a class="row-link" href="#" data-go="check" data-date="${t}"><span class="time">${h(c.start)}</span>
+        <span class="grow"><b>${h(c.name)}</b></span><span class="badge ${n >= mem.length && mem.length ? 'green' : ''}">출결 ${n}/${mem.length}</span></a>`;
+    }).join('') || '<p class="muted">오늘 정규 수업이 없습니다.</p>'}
+    ${planned.map(x => `<div class="row"><span class="time">${h(x.plan_time) || '보강'}</span>
+      <span class="grow"><b>${h(stu(x.student_id).name)}</b> 보강 <small class="muted">${mdw(x.absent_date)} 결석분</small></span></div>`).join('')}
+    <p class="actions"><a class="btn primary" href="#" data-go="check">✅ 오늘 출석체크</a></p>
+  </section>
+  ${wait.length ? `<section class="card"><h2>보강 날짜를 잡아야 할 결석</h2>
+    ${wait.map(x => `<a class="row-link" href="#" data-go="makeups"><span class="time">${mdw(x.absent_date)}</span>
+      <span class="grow"><b>${h(stu(x.student_id).name)}</b> <small>${h(clsName(x.class_id))}</small></span><span class="badge red">날짜 미정</span></a>`).join('')}
+  </section>` : ''}
+  ${unpaid.length ? `<section class="card"><h2>미납 수강료</h2>
+    ${unpaid.slice(0, 5).map(b => `<div class="row"><span class="grow"><a href="#" data-go="student" data-id="${b.student_id}">${h(stu(b.student_id).name)}</a>
+      <small>${billLabel(b)}</small></span><span>${won(b.amount)}</span>
+      <button class="btn small ok-btn" data-act="pay" data-id="${b.id}">✔ 냈어요</button></div>`).join('')}
+    ${unpaid.length > 5 ? `<a class="more" href="#" data-go="tuition">미납 ${unpaid.length}건 모두 보기 ›</a>` : ''}
+  </section>` : ''}`;
+};
+
+// ---------- 출석체크 ----------
+VIEWS.check = p => {
+  const day = p.date || D.today, all = !!p.all;
+  const list = D.classes.filter(c => c.active && (all || c.days.split(',').includes(wd(day))));
+  const planned = D.makeups.filter(x => x.status === '예정' && x.plan_date === day);
+  const cards = list.map(c => {
+    const att = D.attendance.filter(a => a.class_id === c.id && a.date === day);
+    const mem = sortStudents(active().filter(s => s.class_id === c.id));
+    att.forEach(a => { if (!mem.some(s => s.id === a.student_id)) mem.push(stu(a.student_id)); });
+    const les = D.lessons.find(l => l.class_id === c.id && l.date === day) || {};
+    const prev = D.lessons.filter(l => l.class_id === c.id && l.date < day && l.homework).sort((a, b) => a.date < b.date ? 1 : -1)[0];
+    const rows = mem.map(s => {
+      const a = att.find(x => x.student_id === s.id);
+      const cy = cyc(s), pend = openMk(s.id).length;
+      return `<div class="check-row" data-sid="${s.id}">
+        <span class="nm"><span class="nm-top">${gt(s)}<a href="#" data-go="student" data-id="${s.id}"><b class="nm-${sxc(s)}">${h(s.name)}</b></a></span>
+          <span class="nm-sub">${tags(s)}${s.class_id !== c.id ? '<span class="badge">다른 반</span>' : ''}
+          ${!cy.monthly ? `<span class="badge ${cy.complete ? 'red' : ''}">${cy.cycle}차 ${cy.used}/${cy.size}</span>` : ''}
+          ${pend ? `<span class="badge red">보강 ${pend}</span>` : ''}</span></span>
+        <span class="btns"><span class="seg">${D.consts.ATT.map(x => `<label><input type="radio" name="att_${s.id}" value="${x}" ${a && a.status === x ? 'checked' : ''}><span class="a-${x}">${x}</span></label>`).join('')}</span>
+        <span class="seg hw"><small class="muted">숙제</small>${HW.filter(([v]) => v).map(([v, t]) => `<label><input type="radio" name="hw_${s.id}" value="${v}" ${(a ? a.hw : '') === v ? 'checked' : ''}><span class="h-${v}">${t}</span></label>`).join('')}</span></span>
+        ${s.memo ? `<small class="note-tag ck-note">📌 ${h(s.memo.length > 40 ? s.memo.slice(0, 40) + '…' : s.memo)}</small>` : ''}
+      </div>`;
+    }).join('');
+    return `<form class="card check-card" data-form="check" data-cid="${c.id}" data-date="${day}">
+      <h2>${h(c.name)} <span class="badge ${att.length >= mem.length && mem.length ? 'green' : ''}">체크 ${att.length}/${mem.length}</span></h2>
+      ${prev ? `<p class="note small">지난 수업(${md(prev.date)}) 숙제: <b>${h(prev.homework)}</b></p>` : ''}
+      ${rows || '<p class="muted">이 반에 학생이 없습니다. 학생 화면에서 반을 정해 주세요.</p>'}
+      <details class="lesson-box" ${les.progress || les.homework ? 'open' : ''}><summary>📖 진도 · 다음 숙제 기록</summary>
+        <div class="form">
+        <label>오늘 진도<input name="progress" maxlength="500" value="${h(les.progress)}" placeholder="예: 5-2 분수의 곱셈 p.24~27"></label>
+        <label>다음 숙제<input name="homework" maxlength="500" value="${h(les.homework)}" placeholder="예: 연산 12~13쪽"></label>
+        <label>수업 메모<textarea name="memo" maxlength="1000" rows="2">${h(les.memo)}</textarea></label></div>
+      </details>
+      ${mem.length ? `<p class="actions"><button class="btn primary">저장</button>
+        <button class="btn" name="rest" value="1">나머지 모두 출석</button></p>` : ''}
+    </form>`;
+  }).join('');
+  return `<div class="head">
+    <a class="btn" href="#" data-go="check" data-date="${addDays(day, -1)}" data-all="${all ? 1 : ''}" aria-label="전날">‹</a>
+    <h1>${+day.slice(5, 7)}월 ${+day.slice(8)}일 (${wd(day)}) 출석체크</h1>
+    <a class="btn" href="#" data-go="check" data-date="${addDays(day, 1)}" data-all="${all ? 1 : ''}" aria-label="다음날">›</a></div>
+  <div class="filters"><input type="date" value="${day}" data-nav="check" aria-label="날짜">
+    ${day !== D.today ? '<a class="btn" href="#" data-go="check">오늘</a>' : ''}
+    <a class="btn" href="#" data-go="check" data-date="${day}" data-all="${all ? '' : 1}">${all ? '이 요일 반만' : '모든 반 보기'}</a></div>
+  <p class="muted small">출결과 숙제를 누르고 <b>저장</b>하세요. <b>결석</b>은 보강 현황판에 자동으로 올라가고, <b>보강</b>은 남은 보강을 완료 처리합니다.</p>
+  ${planned.length ? `<section class="card mk-group g-plan"><h2>오늘 보강 예정</h2>
+    ${planned.map(x => `<div class="row"><span class="grow"><b>${h(stu(x.student_id).name)}</b> ${h(x.plan_time)}
+      <small class="muted">${mdw(x.absent_date)} 결석분 · ${h(clsName(x.class_id))}</small></span>
+      <button class="btn small ok-btn" data-act="mk-done" data-id="${x.id}" data-date="${day}">✔ 보강했어요</button></div>`).join('')}
+  </section>` : ''}
+  ${cards || `<section class="card"><p class="muted">${wd(day)}요일에 수업이 있는 반이 없습니다.
+    <a href="#" data-go="check" data-date="${day}" data-all="1">모든 반 보기</a>로 체크하거나, 설정에서 반의 수업 요일을 정하세요.</p></section>`}`;
+};
+
+// ---------- 출석부 (종이 출석부 모양, 보기 전용) ----------
+VIEWS.book = p => {
+  const cid = p.cid ? +p.cid : 0;
+  const list = sortStudents(active().filter(s => !cid || s.class_id === cid));
+  const items = list.map(s => {
+    const cy = cyc(s);
+    const bill = cy.monthly ? D.tuition.find(b => b.student_id === s.id && b.month === thisMonth() && b.cycle === 0)
+      : D.tuition.find(b => b.student_id === s.id && b.cycle === cy.cycle);
+    const absent = cy.cells.length ? D.attendance.filter(a => a.student_id === s.id && a.status === '결석' && a.date >= cy.cells[0]).length : 0;
+    const mk = st => D.makeups.filter(x => x.student_id === s.id && x.status === st && (st !== '완료' || x.done_date.startsWith(thisMonth()))).length;
+    return { s, cy, bill, absent, wait: mk('대기'), plan: mk('예정'), done: mk('완료') };
+  });
+  const W = Math.max(8, ...items.map(x => x.cy.monthly ? x.cy.cells.length : x.cy.size));
+  return `<div class="head"><h1>출석부</h1><a class="btn primary" href="#" data-go="check">✅ 출석체크 하기</a>
+    <select data-nav="book" aria-label="반"><option value="">전체 재원생</option>${options(D.classes.filter(c => c.active).map(c => [c.id, c.name]), cid)}</select></div>
+  <p class="muted small">회차제는 진행 중인 묶음, 월정액은 이번 달 출석 날짜가 칸에 채워집니다. 이 화면은 보기 전용이에요.
+    보강 칸: <span class="badge red">날짜 미정</span> <span class="badge yellow">들어야 함</span> <span class="badge green">이번 달 완료</span></p>
+  <section class="card"><div class="table-wrap"><table class="book">
+    <tr><th>#</th><th>학년</th><th>이름</th>${Array.from({ length: W }, (_, i) => `<th>${i + 1}</th>`).join('')}<th>결석</th><th>보강</th><th>수강료</th></tr>
+    ${items.map((x, i) => `<tr><td>${i + 1}</td><td>${h(x.s.grade)}</td>
+      <td class="nm"><a href="#" data-go="student" data-id="${x.s.id}">${h(x.s.name)}</a>${!x.cy.monthly ? `<br><small class="muted">${x.cy.cycle}차 · ${x.cy.used}/${x.cy.size}</small>` : ''}</td>
+      ${Array.from({ length: W }, (_, n) => n < x.cy.cells.length ? `<td class="cell on">${md(x.cy.cells[n])}</td>`
+        : (!x.cy.monthly && n >= x.cy.size ? '<td class="cell off"></td>' : '<td class="cell"></td>')).join('')}
+      <td>${x.absent || ''}</td>
+      <td class="mk-cell">${x.wait ? `<span class="badge red">날짜 미정 ${x.wait}</span>` : ''}${x.plan ? `<span class="badge yellow">들어야 함 ${x.plan}</span>` : ''}${x.done ? `<span class="badge green">완료 ${x.done}</span>` : ''}</td>
+      <td>${x.bill ? (x.bill.paid_date ? '<span class="badge green">납부</span>' : '<span class="badge red">미납</span>') : '<small class="muted">-</small>'}</td></tr>`).join('')
+      || `<tr><td colspan="${W + 6}" class="muted">재원생이 없습니다.</td></tr>`}
+  </table></div></section>`;
+};
+
+// ---------- 보강 ----------
+function mkRow(x) {
+  const s = stu(x.student_id), t = D.today;
+  const doneDay = x.plan_date && x.plan_date <= t ? x.plan_date : t;
+  const badge = x.status === '대기' ? '<span class="badge red">날짜 미정</span>'
+    : x.status === '예정' ? `<span class="badge ${x.plan_date < t ? 'red' : 'yellow'}">${mdw(x.plan_date)} ${h(x.plan_time)} ${x.plan_date < t ? '지남·확인 필요' : '보강 예정'}</span>`
+    : x.status === '완료' ? `<span class="badge green">${md(x.done_date)} 완료</span>` : '<span class="badge">미진행</span>';
+  const open = x.status === '대기' || x.status === '예정';
+  return `<div class="mk-row mk-${x.status}"><div class="row">
+    <span class="grow">${gt(s)}<a href="#" data-go="student" data-id="${s.id}"><b class="nm-${sxc(s)}">${h(s.name)}</b></a> ${tags(s)} <small>${h(clsName(x.class_id)) || '반 미지정'}</small><br>
+      <span class="att a-결석">결석 ${mdw(x.absent_date)}</span>${x.reason ? ` <small>· ${h(x.reason)}</small>` : ''}</span>${badge}</div>
+    ${x.status === '대기' ? `<form class="form row quick" data-form="mk-plan" data-id="${x.id}">
+      <input type="date" name="plan_date" required aria-label="보강 날짜"><input type="time" name="plan_time" aria-label="보강 시간">
+      <button class="btn primary">📅 보강일 저장</button></form>` : ''}
+    ${x.status === '예정' ? `<p class="actions"><button class="btn ok-btn" data-act="mk-done" data-id="${x.id}" data-date="${doneDay}">✔ 보강했어요 (${md(doneDay)})</button></p>` : ''}
+    ${x.memo ? `<p class="muted small">메모: ${h(x.memo)}</p>` : ''}
+    <details><summary>${open ? '날짜 변경 · 다른 날 완료 · 보강 안 함' : '관리'}</summary>
+      ${open ? `<form class="form row" data-form="mk-plan" data-id="${x.id}"><input type="date" name="plan_date" value="${h(x.plan_date)}" required aria-label="보강 날짜">
+          <input type="time" name="plan_time" value="${h(x.plan_time)}" aria-label="보강 시간"><button class="btn">날짜 저장</button></form>
+        <form class="form row" data-form="mk-done" data-id="${x.id}"><input type="date" name="done_date" value="${doneDay}" aria-label="보강한 날짜">
+          <input name="memo" maxlength="200" placeholder="메모 (예: 1:1 보강)" value="${h(x.memo)}"><button class="btn">이 날짜로 완료</button></form>
+        <form class="form row" data-form="mk-cancel" data-id="${x.id}" data-confirm="보강을 하지 않는 것으로 처리할까요?">
+          <input name="memo" maxlength="200" placeholder="사유 (예: 이월, 학부모 요청)"><button class="btn small">보강 안 함</button></form>
+        <p class="actions"><a class="btn small" href="#" data-go="message" data-id="${s.id}" data-kind="makeup" data-mid="${x.id}">학부모 안내문</a></p>`
+      : `<p class="actions"><button class="btn small" data-act="mk-reopen" data-id="${x.id}">다시 해야 할 보강으로</button></p>`}
+      <form class="form row" data-form="mk-reason" data-id="${x.id}"><input name="reason" maxlength="200" placeholder="결석 사유" value="${h(x.reason)}">
+        <input name="memo" maxlength="200" placeholder="메모" value="${h(x.memo)}"><button class="btn small">사유·메모 저장</button></form>
+    </details></div>`;
+}
+VIEWS.makeups = p => {
+  const tab = p.tab || 'todo', month = p.month || thisMonth(), t = D.today;
+  const cnt = st => D.makeups.filter(x => x.status === st).length;
+  let body;
+  if (tab === 'todo') {
+    const wait = D.makeups.filter(x => x.status === '대기').sort((a, b) => a.absent_date < b.absent_date ? -1 : 1);
+    const plan = D.makeups.filter(x => x.status === '예정').sort((a, b) => a.plan_date < b.plan_date ? -1 : 1);
+    const done = D.makeups.filter(x => x.status === '완료' && x.done_date.startsWith(thisMonth())).sort((a, b) => a.done_date < b.done_date ? 1 : -1);
+    body = `<section class="card mk-group g-wait"><h2>① 보강 날짜를 정해야 해요 <span class="badge red">${wait.length}명</span></h2>
+        ${wait.slice(0, 5).map(mkRow).join('') || '<p class="muted">없어요 👍</p>'}
+        ${wait.length > 5 ? `<details class="more-list"><summary>나머지 ${wait.length - 5}건 더 보기</summary>${wait.slice(5).map(mkRow).join('')}</details>` : ''}</section>
+      <section class="card mk-group g-plan"><h2>② 보강 들어야 해요 <span class="badge yellow">${plan.length}명</span></h2>
+        <p class="muted small">보강을 마쳤으면 ✔ 보강했어요를 누르세요. 출결에도 ‘보강’으로 남아 회차에 들어갑니다.</p>
+        ${plan.map(mkRow).join('') || '<p class="muted">없어요</p>'}</section>
+      <section class="card mk-group g-done"><h2>③ 이번 달 보강 완료 <span class="badge green">${done.length}명</span></h2>
+        ${done.map(mkRow).join('') || '<p class="muted">아직 없어요</p>'}</section>`;
+  } else {
+    const rows = D.makeups.filter(x => x.absent_date.startsWith(month)).sort((a, b) => a.absent_date < b.absent_date ? -1 : 1);
+    body = `<div class="head"><a class="btn" href="#" data-go="makeups" data-tab="all" data-month="${monthShift(month, -1)}">‹</a>
+      <h2>${month.slice(0, 4)}년 ${+month.slice(5)}월 결석분</h2><a class="btn" href="#" data-go="makeups" data-tab="all" data-month="${monthShift(month, 1)}">›</a></div>
+      <section class="card">${rows.map(mkRow).join('') || '<p class="muted">이 달 결석 기록이 없습니다.</p>'}</section>`;
+  }
+  return `<div class="head"><h1>결석 · 보강 관리</h1><a class="btn" href="#" data-go="mksheet" data-month="${month}">🖨 보강완료표</a></div>
+  <div class="stats"><div class="stat ${cnt('대기') ? 'warn' : ''}"><span>날짜 미정</span><b>${cnt('대기')}건</b></div>
+    <div class="stat"><span>보강 예정</span><b>${cnt('예정')}건</b></div><div class="stat"><span>보강 완료</span><b>${cnt('완료')}건</b></div>
+    <div class="stat"><span>미진행</span><b>${cnt('취소')}건</b></div></div>
+  <nav class="subtabs"><a href="#" data-go="makeups" class="${tab === 'todo' ? 'on' : ''}">보강 현황판</a>
+    <a href="#" data-go="makeups" data-tab="all" data-month="${month}" class="${tab === 'all' ? 'on' : ''}">월별 전체</a></nav>
+  ${body}
+  <details class="card"><summary>+ 결석 직접 등록 (미리 연락받은 결석 등)</summary>
+    <form class="form" data-form="mk-new"><div class="two">
+      <label>학생<select name="student_id" required>${options(sortStudents(active()).map(s => [s.id, s.name + ' ' + s.grade]))}</select></label>
+      <label>결석한 반<select name="class_id"><option value="">(선택 안 함)</option>${options(D.classes.filter(c => c.active).map(c => [c.id, c.name]))}</select></label></div>
+      <div class="two"><label>결석일<input type="date" name="absent_date" value="${t}" required></label>
+      <label>사유<input name="reason" maxlength="200" placeholder="예: 감기, 가족여행"></label></div>
+      <button class="btn primary">결석 등록</button>
+      <p class="muted small">반을 고르면 그날 출석체크에도 ‘결석’으로 남습니다.</p></form></details>`;
+};
+VIEWS.mksheet = p => {
+  const month = p.month || thisMonth();
+  const rows = D.makeups.filter(x => x.absent_date.startsWith(month)).sort((a, b) => a.absent_date < b.absent_date ? -1 : 1);
+  const label = { 대기: '날짜 미정', 예정: '보강 예정', 완료: '완료', 취소: '미진행' };
+  return `<div class="head no-print"><a class="btn" href="#" data-go="mksheet" data-month="${monthShift(month, -1)}">‹</a>
+    <h1>${+month.slice(5)}월 보강완료표</h1><a class="btn" href="#" data-go="mksheet" data-month="${monthShift(month, 1)}">›</a>
+    <button class="btn primary" data-act="print">🖨 인쇄</button></div>
+  <section class="card sheet"><h2 class="sheet-title">${h(D.settings.academy)} ${month.slice(0, 4)}년 ${+month.slice(5)}월 보강완료표</h2>
+    <div class="table-wrap"><table class="mk-sheet">
+    <tr><th>No</th><th>학생</th><th>반</th><th>결석일</th><th>사유</th><th>보강예정일</th><th>보강완료일</th><th>상태</th><th>확인</th></tr>
+    ${rows.map((x, i) => `<tr class="mk-${x.status}"><td>${i + 1}</td><td>${h(stu(x.student_id).name)}</td><td>${h(clsName(x.class_id))}</td>
+      <td>${mdw(x.absent_date)}</td><td>${h(x.reason)}</td><td>${x.plan_date ? mdw(x.plan_date) + ' ' + h(x.plan_time) : ''}</td>
+      <td>${mdw(x.done_date)}</td><td>${label[x.status] || ''}</td><td class="sign"></td></tr>`).join('') || '<tr><td colspan="9">이 달 결석 기록이 없습니다.</td></tr>'}
+    </table></div><p class="muted small">출력일 ${D.today}</p></section>`;
+};
+
+// ---------- 학생 ----------
+VIEWS.students = p => {
+  const q = (p.q || '').trim(), st = p.status || '재원';
+  const base = sortStudents(D.students.filter(s => (st === 'all' || s.status === st) &&
+    (!q || [s.name, s.school, s.parent_name, s.parent_phone, s.memo].join(' ').includes(q))));
+  // 학년 고르기: 있는 학년만 버튼으로, 인원수와 함께
+  const gk = s => gradeNum(s) || '?', gsel = p.grade || '';
+  const grades = [...new Set(base.map(gk))].sort();
+  const list = gsel ? base.filter(s => gk(s) === gsel) : base;
+  const chip = (g, label, n) => `<a href="#" data-go="students" data-grade="${g}" data-q="${h(q)}" data-status="${h(st)}" class="gf ${g && g !== '?' ? 'g' + g : ''}${gsel === g ? ' on' : ''}">${label} <b>${n}</b></a>`;
+  const gfilter = `<div class="gfs">${chip('', '전체', base.length)}${grades.map(g => chip(g, g === '?' ? '학년 미정' : g + '학년', base.filter(s => gk(s) === g).length)).join('')}</div>`;
+  const noSx = list.filter(s => !s.gender).length;
+  return `<div class="head"><h1>학생</h1><a class="btn" href="#" data-go="feeSheet">한 번에 입력</a>
+    <a class="btn primary" href="#" data-go="studentEdit">+ 학생 등록</a></div>
+  <form class="filters" data-form="stu-search"><input name="q" value="${h(q)}" placeholder="이름·학교·학부모·특이사항 검색" maxlength="50">
+    <select name="status">${options([['재원', '재원'], ['휴원', '휴원'], ['퇴원', '퇴원'], ['all', '전체']], st)}</select><button class="btn">검색</button></form>
+  ${gfilter}
+  ${noSx ? `<p class="note small">성별이 비어 있는 학생 ${noSx}명 — <a href="#" data-go="feeSheet">한 번에 입력</a>에서 남/여를 눌러 주세요.</p>` : ''}
+  <section class="stu-list">${list.map(s => `<a class="stu ${sxc(s)}${s.status !== '재원' ? ' dim' : ''}" href="#" data-go="student" data-id="${s.id}">
+    ${gbar(s, true)}<span class="av" aria-hidden="true">${s.gender === '남' ? '👦' : s.gender === '여' ? '👧' : '🙂'}</span>
+    <span class="grow"><span class="stu-top">${gt(s)}<b class="nm">${h(s.name)}</b></span>
+    <small class="muted">${h(clsName(s.class_id)) || '반 미배정'}${s.status !== '재원' ? ' · ' + h(s.status) : ''}</small>
+    ${s.memo ? `<small class="note-tag">📌 ${h(s.memo.length > 30 ? s.memo.slice(0, 30) + '…' : s.memo)}</small>` : ''}</span></a>`).join('') || '<p class="muted">학생이 없습니다.</p>'}</section>
+  <p class="muted">${list.length}명 · <span class="sx m">남</span> ${list.filter(s => s.gender === '남').length} · <span class="sx f">여</span> ${list.filter(s => s.gender === '여').length}</p>`;
+};
+
+VIEWS.student = p => {
+  const s = D.students.find(x => x.id === +p.id);
+  if (!s) return '<p class="muted">학생을 찾을 수 없습니다.</p>';
+  const cy = cyc(s);
+  const since = addDays(D.today, -90);
+  const att = D.attendance.filter(a => a.student_id === s.id && a.date >= since).sort((a, b) => a.date < b.date ? 1 : -1);
+  const stat = {}; att.forEach(a => { stat[a.status] = (stat[a.status] || 0) + 1; });
+  const mks = D.makeups.filter(x => x.student_id === s.id).sort((a, b) => a.absent_date < b.absent_date ? 1 : -1);
+  const bills = D.tuition.filter(b => b.student_id === s.id).sort((a, b) => (a.month + a.cycle) < (b.month + b.cycle) ? 1 : -1);
+  const scores = D.scores.filter(x => x.student_id === s.id).sort((a, b) => a.date < b.date ? 1 : -1);
+  const consults = D.consults.filter(x => x.student_id === s.id).sort((a, b) => a.date < b.date ? 1 : -1);
+  const tel = v => v ? `<a href="tel:${h(v)}">${h(v)}</a> · <a href="sms:${h(v)}">문자</a>` : '-';
+  const mkLabel = { 대기: ['red', '날짜 미정'], 예정: ['yellow', '보강 예정'], 완료: ['green', '보강 완료'], 취소: ['', '미진행'] };
+  return `<div class="head"><h1>${gt(s)}<span class="nm-${sxc(s)}">${h(s.name)}</span> ${tags(s)} <small>${h(s.school)}</small></h1>
+    <span class="badge ${s.status === '재원' ? 'green' : ''}">${h(s.status)}</span><a class="btn" href="#" data-go="studentEdit" data-id="${s.id}">✏️ 정보 수정</a></div>
+  <section class="card"><dl class="info">
+    <dt>학생</dt><dd>${tel(s.phone)}</dd>
+    <dt>학부모</dt><dd>${h(s.parent_name)} ${h(s.parent_relation)} ${s.parent_phone ? tel(s.parent_phone) : ''}</dd>
+    <dt>반</dt><dd>${h(clsName(s.class_id)) || '-'}</dd>
+    <dt>수강료</dt><dd>${s.billing === '회차제' ? `${s.cycle_size}회 ${won(s.fee)} · <b>${cy.cycle}차 ${cy.used}/${cy.size}회</b>` : `월 ${won(s.fee)}`}
+      ${s.fee <= 0 ? ' <span class="badge yellow">금액 미설정</span>' : ''}</dd>
+    <dt>등록일</dt><dd>${h(s.start_date) || '-'}</dd></dl>
+    <form class="form note-box" data-form="note" data-id="${s.id}"><label>📌 특이사항<textarea name="memo" maxlength="2000" rows="3" placeholder="예: 형제 할인, 화요일 늦음, 분수 약함">${h(s.memo)}</textarea></label>
+      <button class="btn small">특이사항 저장</button></form>
+    <p class="actions"><a class="btn" href="#" data-go="message" data-id="${s.id}" data-kind="report">📝 월간 학습안내문</a>
+      <a class="btn" href="#" data-go="message" data-id="${s.id}" data-kind="tuition">💳 수강료 안내문</a></p></section>
+  <section class="card"><h2>최근 90일 출결·숙제</h2>
+    <p>${Object.keys(stat).map(k => `<span class="badge">${h(k)} ${stat[k]}</span>`).join(' ') || '<span class="muted">기록 없음</span>'}</p>
+    ${att.length ? `<div class="table-wrap"><table><tr><th>날짜</th><th>반</th><th>출결</th><th>숙제</th><th>진도</th></tr>
+      ${att.slice(0, 30).map(a => { const l = D.lessons.find(x => x.class_id === a.class_id && x.date === a.date) || {};
+        return `<tr><td>${mdw(a.date)}</td><td>${h(clsName(a.class_id))}</td><td class="att a-${h(a.status)}">${h(a.status)}</td><td>${h(a.hw)}</td><td>${h(l.progress)}</td></tr>`; }).join('')}
+    </table></div>` : ''}</section>
+  <section class="card"><h2>결석 · 보강</h2>
+    ${mks.map(x => `<div class="row"><span class="grow">결석 ${mdw(x.absent_date)} ${x.reason ? `<small>· ${h(x.reason)}</small>` : ''}</span>
+      <span class="badge ${mkLabel[x.status][0]}">${mkLabel[x.status][1]}${x.status === '예정' ? ' ' + mdw(x.plan_date) : x.status === '완료' ? ' ' + md(x.done_date) : ''}</span></div>`).join('') || '<p class="muted">결석 기록이 없습니다.</p>'}
+    <p class="actions"><a class="btn small" href="#" data-go="makeups">보강 관리</a></p></section>
+  <section class="card"><h2>수강료</h2>
+    ${bills.map(b => `<div class="row"><span class="grow">${billLabel(b)} <small class="muted">${h(b.month)}</small></span><span>${won(b.amount)}</span>
+      ${b.paid_date ? `<span class="badge green">${md(b.paid_date)} ${h(b.method)}</span>` : `<button class="btn small ok-btn" data-act="pay" data-id="${b.id}">✔ 냈어요</button>`}</div>`).join('') || '<p class="muted">청구 내역이 없습니다.</p>'}</section>
+  <section class="card"><h2>성적</h2>
+    ${scores.map(x => `<div class="row"><span class="grow">${h(x.date)} <small>${h(x.kind)}</small> ${h(x.title)} <b>${h(x.score)}</b>
+      ${x.memo ? `<br><small class="muted">${h(x.memo)}</small>` : ''}</span><button class="link" data-act="del" data-kind="scores" data-id="${x.id}">삭제</button></div>`).join('') || '<p class="muted">-</p>'}
+    <details><summary>+ 성적 입력</summary><form class="form" data-form="score" data-id="${s.id}"><div class="two">
+      <label>날짜<input type="date" name="date" value="${D.today}"></label><label>구분<select name="kind">${options(['단원평가', '학교시험', '경시·모의', '기타'])}</select></label></div>
+      <div class="two"><label>시험<input name="title" maxlength="50" placeholder="예: 5-2 2단원"></label><label>점수<input name="score" maxlength="20" placeholder="예: 92"></label></div>
+      <label>메모<input name="memo" maxlength="200" placeholder="틀린 유형 등"></label><button class="btn primary">저장</button></form></details></section>
+  <section class="card"><h2>상담 기록</h2>
+    ${consults.map(x => `<div class="consult"><small class="muted">${h(x.date)}</small> <button class="link right" data-act="del" data-kind="consults" data-id="${x.id}">삭제</button>
+      <p class="pre">${h(x.content)}</p></div>`).join('') || '<p class="muted">-</p>'}
+    <details><summary>+ 상담 기록</summary><form class="form" data-form="consult" data-id="${s.id}">
+      <label>날짜<input type="date" name="date" value="${D.today}"></label><label>내용<textarea name="content" rows="3" maxlength="2000" required></textarea></label>
+      <button class="btn primary">저장</button></form></details></section>
+  <details class="card danger-zone"><summary>학생 정보 완전 삭제</summary>
+    <p class="muted small">출결·보강·수강료·성적·상담 기록까지 모두 지워집니다. 그만둔 학생은 보통 ‘수정’에서 상태를 <b>퇴원</b>으로 바꾸세요.</p>
+    <button class="danger" data-act="del-student" data-id="${s.id}">${h(s.name)} 정보 모두 삭제</button></details>`;
+};
+
+VIEWS.studentEdit = p => {
+  const s = p.id ? D.students.find(x => x.id === +p.id) : null;
+  const v = s || { status: '재원', billing: '회차제', cycle_size: 8, cycle_offset: 0, start_date: D.today, class_id: 0, fee: '' };
+  return `<div class="head"><h1>${s ? '학생 정보 수정' : '학생 등록'}</h1></div>
+  <form class="card form" data-form="student" data-id="${s ? s.id : ''}">
+    <div class="two"><label>이름 *<input name="name" required maxlength="30" value="${h(v.name)}"></label>
+      <label>학년<input name="grade" maxlength="10" value="${h(v.grade)}" placeholder="예: 초5"></label></div>
+    <div class="sx-field"><span>성별</span><span class="seg sxseg">${['남', '여'].map(g => `<label><input type="radio" name="gender" value="${g}" ${v.gender === g ? 'checked' : ''}><span class="sx-${g === '남' ? 'm' : 'f'}">${g === '남' ? '👦 남' : '👧 여'}</span></label>`).join('')}</span></div>
+    <div class="two"><label>반<select name="class_id"><option value="0">(반 없음)</option>${options(D.classes.filter(c => c.active).map(c => [c.id, c.name]), v.class_id)}</select></label>
+      <label>상태<select name="status">${options(D.consts.STATUS, v.status)}</select></label></div>
+    <label>학교<input name="school" maxlength="50" value="${h(v.school)}" placeholder="예: 기흥초"></label>
+    <label>학생 연락처<input name="phone" maxlength="30" inputmode="tel" value="${h(v.phone)}"></label>
+    <div class="two"><label>학부모 이름<input name="parent_name" maxlength="30" value="${h(v.parent_name)}"></label>
+      <label>관계<input name="parent_relation" maxlength="10" value="${h(v.parent_relation)}" placeholder="어머니"></label></div>
+    <label>학부모 연락처<input name="parent_phone" maxlength="30" inputmode="tel" value="${h(v.parent_phone)}"></label>
+    <fieldset class="box"><legend>수강료</legend>
+      <div class="two"><label>방식<select name="billing">${options(D.consts.BILLING, v.billing)}</select></label>
+        <label>금액(원)<input name="fee" inputmode="numeric" value="${h(v.fee || '')}" placeholder="예: 200000"></label></div>
+      <div class="two"><label>회차제: 몇 회 묶음<input name="cycle_size" inputmode="numeric" value="${h(v.cycle_size)}"></label>
+        <label>이미 진행한 회차<input name="cycle_offset" inputmode="numeric" value="${h(v.cycle_offset)}"></label></div>
+      <p class="muted small">회차제: 8회를 한 묶음으로 세고, 새 묶음의 첫 수업을 출석체크하면 그 묶음 수강료가 자동 청구됩니다.
+        ‘이미 진행한 회차’는 앱을 쓰기 전에 이번 묶음에서 이미 한 횟수입니다. 월정액은 수강료 화면에서 달마다 청구합니다.</p></fieldset>
+    <label>등록일<input type="date" name="start_date" value="${h(v.start_date)}"></label>
+    <label>특이사항 <small class="muted">(건강·민감정보는 꼭 필요한 것만)</small><textarea name="memo" maxlength="2000" rows="3">${h(v.memo)}</textarea></label>
+    <button class="primary sticky">저장</button></form>`;
+};
+
+VIEWS.feeSheet = () => `<div class="head"><h1>성별 · 수강료 · 특이사항 입력</h1></div>
+  <p class="muted small">학생마다 금액과 특이사항을 적고 맨 아래 <b>저장</b>을 누르세요. 회차제는 8회 묶음 금액, 월정액은 한 달 금액입니다.
+    금액을 바꾸면 아직 안 낸 청구도 새 금액으로 바뀝니다(이미 낸 것은 그대로).</p>
+  <form class="form" data-form="fee-sheet"><section class="card">
+  ${sortStudents(active()).map(s => `<div class="sheet-row" data-sid="${s.id}">
+    <div class="nm">${gt(s)}<b class="nm-${sxc(s)}">${h(s.name)}</b> <small class="muted">${h(s.billing)}${s.billing === '회차제' ? ' ' + s.cycle_size + '회' : ''}</small>
+      <span class="seg sxseg">${['남', '여'].map(g => `<label><input type="radio" name="gender_${s.id}" value="${g}" ${s.gender === g ? 'checked' : ''}><span class="sx-${g === '남' ? 'm' : 'f'}">${g === '남' ? '👦 남' : '👧 여'}</span></label>`).join('')}</span></div>
+    <label>수강료(원)<input name="fee" inputmode="numeric" value="${s.fee || ''}" placeholder="예: 200000"></label>
+    <label>특이사항<textarea name="memo" maxlength="2000" rows="2">${h(s.memo)}</textarea></label></div>`).join('') || '<p class="muted">재원생이 없습니다.</p>'}
+  </section><button class="primary sticky">저장</button></form>`;
+
+// ---------- 학부모 안내문 ----------
+VIEWS.message = p => {
+  const s = stu(p.id), m = p.month || thisMonth(), kind = p.kind || 'report', set = D.settings;
+  let text = '';
+  if (kind === 'report') {
+    const att = D.attendance.filter(a => a.student_id === s.id && a.date.startsWith(m));
+    const c = k => att.filter(a => a.status === k).length;
+    const hw = k => att.filter(a => a.hw === k).length;
+    const prog = att.map(a => D.lessons.find(l => l.class_id === a.class_id && l.date === a.date)).filter(l => l && l.progress)
+      .sort((a, b) => a.date < b.date ? -1 : 1).map(l => `- ${md(l.date)} ${l.progress}`);
+    const sc = D.scores.filter(x => x.student_id === s.id && x.date.startsWith(m)).map(x => `- ${x.title || x.kind}: ${x.score}`);
+    text = [`[${set.academy}] 안녕하세요, ${s.name} 학부모님.`, `${+m.slice(5)}월 학습 내용을 안내드립니다.`, '',
+      `■ 출결: 출석 ${c('출석') + c('지각') + c('조퇴')}회` + (c('보강') ? `, 보강 ${c('보강')}회` : '') + (c('결석') ? `, 결석 ${c('결석')}회` : ''),
+      att.some(a => a.hw) ? `■ 숙제: 완료 ${hw('완료')} / 일부 ${hw('일부')} / 안함 ${hw('안함')}` : '',
+      prog.length ? '■ 진도\n' + prog.join('\n') : '', sc.length ? '■ 평가\n' + sc.join('\n') : '', '■ 선생님 한마디: ', '', set.closing]
+      .filter((x, i, arr) => x !== '' || (arr[i - 1] !== '' && i > 0)).join('\n');
+  } else if (kind === 'tuition') {
+    const un = D.tuition.filter(b => b.student_id === s.id && !b.paid_date);
+    text = [`[${set.academy}] 안녕하세요, ${s.name} 학부모님.`, '',
+      un.length ? un.map(b => `${billLabel(b)} 수강료 ${won(b.amount)}`).join('\n') + ' 안내드립니다.' : '수강료 안내드립니다.',
+      set.account ? `입금 계좌: ${set.account}` : '', '', '감사합니다.', set.closing].filter(x => x !== null).join('\n');
+  } else {
+    const x = D.makeups.find(y => y.id === +p.mid) || {};
+    text = [`[${set.academy}] 안녕하세요, ${s.name} 학부모님.`, '',
+      `${mdw(x.absent_date)} 결석한 수업의 보강을 ${x.plan_date ? mdw(x.plan_date) + ' ' + (x.plan_time || '') + '에' : '(날짜)에'} 진행하려 합니다.`,
+      '가능하신지 답장 부탁드립니다.', '', '감사합니다.', set.closing].join('\n');
+  }
+  return `<div class="head"><h1>${{ report: '월간 학습안내문', tuition: '수강료 안내문', makeup: '보강 안내문' }[kind]} · ${h(s.name)}</h1></div>
+  ${kind === 'report' ? `<div class="filters"><input type="month" value="${m}" data-nav="message" data-id="${s.id}" data-kind="report" aria-label="월"></div>` : ''}
+  <section class="card"><p class="muted small">내용을 다듬은 뒤 복사해서 카카오톡이나 문자로 보내세요. 이 앱은 아무것도 자동으로 보내지 않습니다.</p>
+    <textarea id="msg" rows="14">${h(text.trim())}</textarea>
+    <p class="actions"><button class="btn primary" data-act="copy">복사</button><a class="btn" href="#" data-go="student" data-id="${s.id}">학생으로 돌아가기</a></p></section>`;
+};
+
+// ---------- 수강료 ----------
+// 현금영수증: 계좌이체·현금으로 낸 수강료는 납부일부터 5일 안에 발급해야 한다
+const rcNeed = b => !!b.paid_date && (b.method === '계좌이체' || b.method === '현금') && !!stu(b.student_id).id;
+const rcTodo = () => D.tuition.filter(b => rcNeed(b) && !b.receipt).sort((a, b) => a.paid_date < b.paid_date ? -1 : 1);
+const digits = v => String(v || '').replace(/[^0-9]/g, '');
+const rcDue = b => {
+  const n = Math.round((dt(addDays(b.paid_date, 5)) - dt(D.today)) / 864e5);
+  return n < 0 ? `<span class="badge red">기한 ${-n}일 지남</span>` : n === 0 ? '<span class="badge red">오늘까지</span>' : `<span class="badge yellow">D-${n}</span>`;
+};
+// 아이폰 '메시지' 앱을 받는 사람·내용이 채워진 채로 연다. 보내기는 직접 누른다.
+const rcSms = b => {
+  const s = stu(b.student_id), ph = digits(s.parent_phone);
+  if (!ph) return '';
+  const body = [`[${D.settings.academy}] 안녕하세요, ${s.name} 학부모님.`,
+    `${billLabel(b)} 수강료 ${won(b.amount)}의 현금영수증(소득공제용)을 ${md(b.receipt || D.today)}에 발급했습니다.`,
+    '홈택스·손택스에서 확인하실 수 있습니다. 감사합니다.'].join('\n');
+  return 'sms:' + ph + '&body=' + encodeURIComponent(body);
+};
+function receiptView(sub) {
+  const todo = rcTodo();
+  const since = addDays(D.today, -31);
+  const done = D.tuition.filter(b => rcNeed(b) && b.receipt && b.receipt >= since).sort((a, b) => a.receipt < b.receipt ? 1 : -1);
+  return `<div class="head"><h1>🧾 현금영수증</h1></div>${sub}
+  <div class="stats"><div class="stat ${todo.length ? 'warn' : ''}"><span>발급할 것</span><b>${todo.length}건</b></div>
+    <div class="stat"><span>발급할 금액</span><b>${won(todo.reduce((a, b) => a + b.amount, 0))}</b></div></div>
+  <p class="rc-help">번호·금액을 누르면 복사돼요. 손택스에서 발급한 뒤 <b>✔ 발급했어요</b>를 누르고, 💬로 학부모님께 알려 주세요.</p>
+  <section class="card mk-group g-wait"><h2>🧾 발급할 것 <span class="badge red">${todo.length}건</span></h2>
+  ${todo.map(b => { const s = stu(b.student_id), ph = digits(s.parent_phone); return `<div class="rc-card">
+    <div class="rc-top"><span>${gt(s)}<a href="#" data-go="student" data-id="${s.id}"><b class="nm-${sxc(s)}">${h(s.name)}</b></a> <small class="muted">${md(b.paid_date)} ${h(b.method)}</small></span>${rcDue(b)}</div>
+    <div class="rc-copy">${ph ? `<button data-act="rc-copy" data-text="${ph}"><small>학부모 번호 📋</small><b>${h(s.parent_phone)}</b></button>`
+      : `<button data-act="rc-copy" data-text="0100001234" class="nophone"><small>번호 없음 → 자진발급 📋</small><b>010-000-1234</b></button>`}
+      <button data-act="rc-copy" data-text="${b.amount}"><small>금액 📋</small><b>${won(b.amount)}</b></button></div>
+    <button class="btn ok-btn rc-ok" data-act="rc-done" data-id="${b.id}">✔ 발급했어요</button></div>`; }).join('') || '<p class="muted">발급할 것이 없어요 👍</p>'}</section>
+  <section class="card mk-group g-done"><h2>✅ 발급 끝 <span class="badge green">${done.length}건</span> <small class="muted">최근 한 달</small></h2>
+  ${done.map(b => { const s = stu(b.student_id), sms = rcSms(b); return `<div class="rc-done"><span class="grow"><b>${h(s.name)}</b> ${won(b.amount)}<br>
+    <small class="muted">${md(b.receipt)} 발급 · <button class="link" data-act="rc-undo" data-id="${b.id}">발급 취소</button></small></span>
+    ${sms ? `<a class="btn small ${b.receipt === D.today ? 'primary' : ''}" href="${h(sms)}">💬 알림 문자</a>` : '<small class="muted">번호 없음</small>'}</div>`; }).join('') || '<p class="muted">아직 없어요</p>'}</section>`;
+}
+VIEWS.tuition = p => {
+  const tab = p.tab || 'board';
+  const sub = `<nav class="subtabs"><a href="#" data-go="tuition" class="${tab === 'board' ? 'on' : ''}">납부 현황</a>
+    <a href="#" data-go="tuition" data-tab="month" class="${tab === 'month' ? 'on' : ''}">월별 청구</a>
+    <a href="#" data-go="tuition" data-tab="receipt" class="rc-tab ${tab === 'receipt' ? 'on' : ''}">🧾 영수증 ${rcTodo().length || ''}</a></nav>`;
+  const methods = options(D.consts.METHODS);
+  if (tab === 'receipt') return receiptView(sub);
+  if (tab === 'board') {
+    const board = sortStudents(active()).map(s => {
+      const unpaid = D.tuition.filter(b => b.student_id === s.id && !b.paid_date).sort((a, b) => a.month < b.month ? -1 : 1);
+      const last = D.tuition.filter(b => b.student_id === s.id && b.paid_date).sort((a, b) => a.paid_date < b.paid_date ? 1 : -1)[0];
+      return { s, unpaid, last, g: unpaid.length ? '미납' : s.fee <= 0 ? '미설정' : last ? '납부' : '청구전' };
+    });
+    const G = k => board.filter(x => x.g === k);
+    const total = G('미납').reduce((a, x) => a + x.unpaid.reduce((b, u) => b + u.amount, 0), 0);
+    return `<div class="head"><h1>수강료 납부 현황</h1><a class="btn" href="#" data-go="feeSheet">✏️ 학생별 수강료 입력</a></div>${sub}
+    <div class="stats"><div class="stat ${G('미납').length ? 'warn' : ''}"><span>미납 학생</span><b>${G('미납').length}명</b></div>
+      <div class="stat"><span>미납 금액</span><b>${won(total)}</b></div><div class="stat"><span>납부 완료</span><b>${G('납부').length}명</b></div></div>
+    <section class="card mk-group g-wait"><h2>💸 아직 안 냈어요 <span class="badge red">${G('미납').length}명</span></h2>
+      ${G('미납').map(x => x.unpaid.map(u => `<div class="tu-row"><div class="row">
+        <span class="grow">${gt(x.s)}<a href="#" data-go="student" data-id="${x.s.id}"><b class="nm-${sxc(x.s)}">${h(x.s.name)}</b></a> ${tags(x.s)}<br>
+        <small>${billLabel(u)} · 청구 ${+u.month.slice(5)}월</small></span><b>${won(u.amount)}</b></div>
+        <form class="tu-line" data-form="pay" data-id="${u.id}"><select name="method" class="mini" aria-label="납부 방법">${methods}</select>
+          <button class="btn ok-btn">✔ 냈어요</button>
+          <a class="btn small" href="#" data-go="message" data-id="${x.s.id}" data-kind="tuition">안내문</a></form></div>`).join('')).join('') || '<p class="muted">미납이 없어요 👍</p>'}
+    </section>
+    <section class="card mk-group g-done"><h2>✅ 냈어요 <span class="badge green">${G('납부').length}명</span></h2>
+      ${G('납부').map(x => { const cy = cyc(x.s); return `<div class="row"><span class="grow"><a href="#" data-go="student" data-id="${x.s.id}"><b>${h(x.s.name)}</b></a>
+        ${!cy.monthly ? `<br><small class="muted">지금 ${cy.cycle}차 ${cy.used}/${cy.size}회 · 다음 묶음 시작하면 자동 청구</small>` : ''}</span>
+        <span class="badge green">${md(x.last.paid_date)} ${h(x.last.method)} · ${won(x.last.amount)}</span></div>`; }).join('') || '<p class="muted">아직 없어요</p>'}
+    </section>
+    ${G('청구전').length ? `<section class="card"><h2>🕒 아직 청구 전 <span class="badge">${G('청구전').length}명</span></h2>
+      <p class="muted small">회차제 학생은 묶음의 첫 수업을 출석체크하면 청구가 생깁니다. 월정액은 ‘월별 청구’에서 청구를 만드세요.</p>
+      <p class="small">${G('청구전').map(x => `<a href="#" data-go="student" data-id="${x.s.id}">${h(x.s.name)}</a>`).join(', ')}</p></section>` : ''}
+    ${G('미설정').length ? `<section class="card mk-group g-plan"><h2>⚙️ 수강료 금액을 정해 주세요 <span class="badge yellow">${G('미설정').length}명</span></h2>
+      <p class="muted small">${G('미설정').map(x => h(x.s.name)).join(', ')}</p>
+      <form class="form row" data-form="fee-all"><input name="amount" inputmode="numeric" required placeholder="예: 200000" aria-label="수강료 금액">
+        <button class="btn primary">이 학생들 모두 이 금액으로</button></form>
+      <p class="actions"><a class="btn" href="#" data-go="feeSheet">학생마다 다르게 입력하기 ›</a></p></section>` : ''}`;
+  }
+  const month = p.month || thisMonth();
+  const rows = D.tuition.filter(b => b.month === month).sort((a, b) => (!!a.paid_date - !!b.paid_date) || (stu(a.student_id).name < stu(b.student_id).name ? -1 : 1));
+  const billed = rows.reduce((a, b) => a + b.amount, 0), paid = rows.filter(b => b.paid_date).reduce((a, b) => a + b.amount, 0);
+  const older = D.tuition.filter(b => b.month < month && !b.paid_date);
+  const missing = active().filter(s => s.billing === '월정액' && s.fee > 0 && !D.tuition.some(b => b.student_id === s.id && b.month === month && b.cycle === 0));
+  return `<div class="head"><a class="btn" href="#" data-go="tuition" data-tab="month" data-month="${monthShift(month, -1)}">‹</a>
+    <h1>${month.slice(0, 4)}년 ${+month.slice(5)}월 수강료</h1><a class="btn" href="#" data-go="tuition" data-tab="month" data-month="${monthShift(month, 1)}">›</a></div>${sub}
+  <div class="stats"><div class="stat"><span>청구</span><b>${won(billed)}</b></div><div class="stat"><span>수납</span><b>${won(paid)}</b></div>
+    <div class="stat ${billed - paid ? 'warn' : ''}"><span>미납</span><b>${won(billed - paid)}</b></div></div>
+  ${missing.length ? `<section class="card"><p>월정액 청구가 없는 학생 ${missing.length}명: <small class="muted">${missing.map(s => h(s.name)).join(', ')}</small></p>
+    <button class="btn primary" data-act="gen-monthly" data-month="${month}">이번 달 월정액 청구 만들기</button></section>` : ''}
+  <section class="card">${rows.map(b => { const s = stu(b.student_id); return `<div class="tu-row ${b.paid_date ? 'paid' : ''}"><div class="row">
+    <span class="grow">${gt(s)}<a href="#" data-go="student" data-id="${s.id}">${h(s.name)}</a> ${tags(s)} <small>${billLabel(b)}</small></span><b>${won(b.amount)}</b>
+    ${b.paid_date ? `<span class="badge green">${md(b.paid_date)} ${h(b.method)}</span>` : '<span class="badge red">미납</span>'}</div>
+    <details><summary>관리</summary>
+      ${b.paid_date ? `<form class="form row" data-form="bill-method" data-id="${b.id}"><select name="method" aria-label="납부 방법">${options(D.consts.METHODS, b.method)}</select>
+          <button class="btn small">방법 바꾸기</button><button type="button" class="btn small" data-act="unpay" data-id="${b.id}">납부 취소</button></form>`
+        : `<form class="form row" data-form="pay" data-id="${b.id}"><input type="date" name="paid_date" value="${D.today}" aria-label="납부일">
+          <select name="method" aria-label="방법">${methods}</select><button class="btn ok-btn">✔ 냈어요</button></form>`}
+      <form class="form row" data-form="bill-amount" data-id="${b.id}"><input name="amount" inputmode="numeric" value="${b.amount}" aria-label="금액">
+        <input name="memo" maxlength="200" value="${h(b.memo)}" placeholder="메모 (형제할인 등)"><button class="btn small">금액 수정</button></form>
+      <p class="actions"><button class="link" data-act="bill-del" data-id="${b.id}">청구 삭제</button></p></details>
+    ${b.memo ? `<small class="muted">${h(b.memo)}</small>` : ''}</div>`; }).join('') || '<p class="muted">이 달 청구 내역이 없습니다.</p>'}</section>
+  ${older.length ? `<section class="card"><h2>이전 달 미납</h2>${older.map(b => `<div class="row"><span class="grow">${h(stu(b.student_id).name)} <small>${h(b.month)} · ${billLabel(b)}</small></span>
+    <span>${won(b.amount)}</span><button class="btn small ok-btn" data-act="pay" data-id="${b.id}">✔ 냈어요</button></div>`).join('')}</section>` : ''}
+  <details class="card"><summary>+ 개별 청구 추가 (교재비, 중도 등록 등)</summary><form class="form" data-form="bill-add" data-month="${month}">
+    <label>학생<select name="student_id">${options(sortStudents(active()).map(s => [s.id, s.name]))}</select></label>
+    <label>금액<input name="amount" inputmode="numeric" required></label><label>메모<input name="memo" maxlength="200" placeholder="예: 교재비"></label>
+    <button class="btn primary">추가</button></form></details>`;
+};
+
+// ---------- 지출 · 결산 ----------
+VIEWS.money = p => {
+  const month = p.month || thisMonth(), year = month.slice(0, 4);
+  const ex = D.expenses.filter(x => x.date.startsWith(month)).sort((a, b) => a.date < b.date ? 1 : -1);
+  const rows = Array.from({ length: 12 }, (_, i) => {
+    const m = year + '-' + String(i + 1).padStart(2, '0');
+    const billed = D.tuition.filter(b => b.month === m).reduce((a, b) => a + b.amount, 0);
+    const got = D.tuition.filter(b => b.paid_date && b.paid_date.startsWith(m)).reduce((a, b) => a + b.amount, 0);
+    const spent = D.expenses.filter(x => x.date.startsWith(m)).reduce((a, x) => a + x.amount, 0);
+    return { m, billed, got, spent, net: got - spent };
+  });
+  const sum = k => rows.reduce((a, r) => a + r[k], 0);
+  return `<div class="head"><a class="btn" href="#" data-go="money" data-month="${monthShift(month, -1)}">‹</a>
+    <h1>${year}년 ${+month.slice(5)}월 지출</h1><a class="btn" href="#" data-go="money" data-month="${monthShift(month, 1)}">›</a></div>
+  <form class="card form" data-form="expense"><div class="two"><label>날짜<input type="date" name="date" value="${month === thisMonth() ? D.today : month + '-01'}"></label>
+    <label>항목<select name="category">${options(D.consts.EXP_CATS)}</select></label></div>
+    <div class="two"><label>금액(원)<input name="amount" inputmode="numeric" required></label><label>내용<input name="memo" maxlength="200" placeholder="예: 5학년 교재 6권"></label></div>
+    <button class="btn primary">지출 추가</button></form>
+  <section class="card"><h2>합계 ${won(ex.reduce((a, x) => a + x.amount, 0))}</h2>
+    ${ex.map(x => `<div class="row"><span class="time">${md(x.date)}</span><span class="grow">${h(x.category)} <small class="muted">${h(x.memo)}</small></span>
+      <span>${won(x.amount)}</span><button class="link" data-act="del" data-kind="expenses" data-id="${x.id}">삭제</button></div>`).join('') || '<p class="muted">-</p>'}</section>
+  <section class="card"><h2>${year}년 결산</h2>
+    <div class="stats"><div class="stat"><span>수납</span><b>${won(sum('got'))}</b></div><div class="stat"><span>지출</span><b>${won(sum('spent'))}</b></div>
+      <div class="stat"><span>순수익</span><b>${won(sum('net'))}</b></div></div>
+    <div class="table-wrap"><table class="num"><tr><th>월</th><th>청구</th><th>수납</th><th>지출</th><th>순수익</th></tr>
+      ${rows.filter(r => r.billed || r.got || r.spent).map(r => `<tr><td>${+r.m.slice(5)}월</td><td>${won(r.billed)}</td><td>${won(r.got)}</td><td>${won(r.spent)}</td>
+        <td class="${r.net < 0 ? 'neg' : ''}">${won(r.net)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">기록이 없습니다.</td></tr>'}</table></div>
+    <p class="muted small">수납은 실제로 받은 날(납부일) 기준입니다.</p></section>`;
+};
+
+// ---------- 설정 ----------
+VIEWS.settings = () => {
+  const dayBoxes = cur => '월화수목금토일'.split('').map(d => `<label><input type="checkbox" name="days" value="${d}" ${cur.includes(d) ? 'checked' : ''}>${d}</label>`).join('');
+  return `<h1>설정</h1>
+  <section class="card"><h2>반 · 수업 시간</h2>
+    ${D.classes.filter(c => c.active).map(c => `<form class="cls-row form" data-form="class" data-id="${c.id}">
+      <div class="two"><label>반 이름<input name="name" value="${h(c.name)}" maxlength="30" required></label>
+        <div class="two"><label>시작<input type="time" name="start" value="${h(c.start)}"></label><label>끝<input type="time" name="end" value="${h(c.end)}"></label></div></div>
+      <div class="days-pick">${dayBoxes(c.days)}</div>
+      <p class="actions"><button class="btn small">저장</button><button type="button" class="link" data-act="class-del" data-id="${c.id}">반 숨기기</button>
+        <small class="muted">학생 ${active().filter(s => s.class_id === c.id).length}명</small></p></form>`).join('')}
+    <details><summary>+ 새 반 만들기</summary><form class="form" data-form="class">
+      <label>반 이름<input name="name" maxlength="30" required placeholder="예: 금요반"></label>
+      <div class="days-pick">${dayBoxes('')}</div>
+      <div class="two"><label>시작<input type="time" name="start" value="16:00"></label><label>끝<input type="time" name="end" value="17:30"></label></div>
+      <button class="btn primary">만들기</button></form></details></section>
+  <section class="card"><h2>안내문 기본 정보</h2><form class="form" data-form="settings">
+    <label>공부방 이름<input name="academy" maxlength="50" value="${h(D.settings.academy)}"></label>
+    <label>입금 계좌<input name="account" maxlength="100" value="${h(D.settings.account)}" placeholder="예: OO은행 000-0000-0000 (예금주 홍길동)"></label>
+    <label>맺음말<input name="closing" maxlength="100" value="${h(D.settings.closing)}" placeholder="예: - 힐스초등수학 드림"></label>
+    <button class="btn primary">저장</button></form></section>
+  <section class="card"><h2>보안 · 백업</h2>
+    <p class="small">• 이 기기: <b>${h(D.me)}</b><br>
+    • 앱 비밀번호를 바꾸려면 PC에서 시트의 Apps Script 편집기를 열어 <b>makePassword</b>를 한 번 실행하세요. 바꾸면 두 폰 모두 새 비밀번호를 다시 넣어야 합니다.<br>
+    • 비밀번호를 8번 틀리면 15분 동안 잠깁니다. 휴대폰을 잃어버리면 바로 비밀번호를 바꾸세요.<br>
+    • 구글 계정(시트 주인)에는 <b>2단계 인증</b>을 꼭 켜 두세요.<br>
+    • 데이터는 구글 시트에 있습니다. 시트의 <b>파일 → 버전 기록</b>으로 예전 상태로 되돌릴 수 있고, 매달 <b>파일 → 다운로드(xlsx)</b>로 따로 보관하면 더 안전합니다.<br>
+    • 시트를 다른 사람과 <b>공유하지 마세요</b>. 아이들과 학부모 개인정보가 들어 있습니다.</p></section>`;
+};
+
+// ================= 이벤트 =================
+document.addEventListener('click', e => {
+  const g = e.target.closest('[data-go]');
+  if (g) {
+    e.preventDefault();
+    if (formDirty && !window.confirm('저장하지 않은 입력이 있어요. 저장하지 않고 이동할까요?')) return;
+    const ds = g.dataset, p = {};
+    ['id', 'date', 'all', 'tab', 'month', 'kind', 'mid', 'cid', 'grade', 'q', 'status'].forEach(k => { if (ds[k]) p[k] = ds[k]; });
+    go(ds.go, p);
+    return;
+  }
+  const a = e.target.closest('[data-act]');
+  if (!a) return;
+  const ds = a.dataset;
+  const ask = (msg, fn) => { if (window.confirm(msg)) fn(); };
+  switch (ds.act) {
+    case 'reload': {
+      const b = document.getElementById('busy');
+      b.innerHTML = loader('불러오는 중…'); b.hidden = false;
+      const done = () => { b.hidden = true; b.innerHTML = loader('저장 중…'); };
+      google.script.run.withSuccessHandler(d => { done(); D = d; render(); toast('새로 불러왔어요'); })
+        .withFailureHandler(e => { done(); toast('불러오지 못했어요. 다시 눌러 주세요.', true); }).getAll();
+      break;
+    }
+    case 'pay': call('tuitionAction', +ds.id, 'pay', { method: '계좌이체', paid_date: D.today }); break;
+    case 'rc-done': call('tuitionAction', +ds.id, 'receipt', {}); break;
+    case 'rc-undo': ask('현금영수증 발급 표시를 취소할까요?', () => call('tuitionAction', +ds.id, 'unreceipt', {})); break;
+    case 'rc-copy': {
+      const t = ds.text, fin = () => toast('복사했어요: ' + t);
+      (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(fin).catch(() => {
+        const x = document.createElement('textarea'); x.value = t; document.body.appendChild(x); x.select();
+        try { document.execCommand('copy'); } catch (e2) { /* 무시 */ } x.remove(); fin(); });
+      break;
+    }
+    case 'unpay': ask('납부 표시를 취소할까요?', () => call('tuitionAction', +ds.id, 'unpay', {})); break;
+    case 'bill-del': ask('이 청구를 삭제할까요?', () => call('tuitionAction', +ds.id, 'delete', {})); break;
+    case 'gen-monthly': call('generateMonthly', ds.month); break;
+    case 'mk-done': call('makeupAction', +ds.id, 'done', { done_date: ds.date }); break;
+    case 'mk-reopen': call('makeupAction', +ds.id, 'reopen', {}); break;
+    case 'del': ask('삭제할까요?', () => call('deleteRow', ds.kind, +ds.id)); break;
+    case 'class-del': ask('이 반을 숨길까요? 반 학생들은 ‘반 없음’이 됩니다.', () => call('deleteClass', +ds.id)); break;
+    case 'del-student': ask('정말 모든 기록을 삭제할까요? 되돌릴 수 없습니다.', () => call('deleteStudent', +ds.id).then(() => go('students', {}, true))); break;
+    case 'print': window.print(); break;
+    case 'more': {
+      const m = document.getElementById('more');
+      m.innerHTML = [['book', '📋 출석부'], ['money', '🧾 지출·결산'], ['settings', '⚙️ 설정']]
+        .map(([v, t]) => `<a href="#" data-go="${v}">${t}</a>`).join('') + '<a href="#" data-act="reload">↻ 새로고침</a>' +
+        `<small class="ver">화면 버전 ${UI_VER} · ${innerWidth}×${innerHeight} · ${Math.round(APP.getBoundingClientRect().height)}</small>`;
+      m.hidden = !m.hidden;
+      break;
+    }
+    case 'copy': {
+      const el = document.getElementById('msg');
+      (navigator.clipboard ? navigator.clipboard.writeText(el.value) : Promise.reject()).catch(() => { el.select(); document.execCommand('copy'); })
+        .finally(() => toast('복사했어요'));
+      break;
+    }
+  }
+});
+
+// 고른 버튼을 한 번 더 누르면 선택이 풀린다 ('-' 버튼 대신)
+document.addEventListener('click', e => {
+  const r = e.target.closest('.seg input[type=radio]');
+  if (!r) return;
+  if (r.dataset.on === '1') { r.checked = false; r.dataset.on = ''; formDirty = true; return; }
+  document.querySelectorAll(`.seg input[name="${r.name}"]`).forEach(x => { x.dataset.on = ''; });
+  r.dataset.on = '1';
+});
+
+document.addEventListener('change', e => {
+  const el = e.target.closest('[data-nav]');
+  if (!el) return;
+  const nav = el.dataset.nav, v = el.value;
+  if (nav === 'check' && v) go('check', { date: v });
+  if (nav === 'book') go('book', { cid: v });
+  if (nav === 'message' && v) go('message', { id: el.dataset.id, kind: el.dataset.kind, month: v });
+});
+
+document.addEventListener('submit', e => {
+  const f = e.target.closest('form[data-form]');
+  if (!f) return;
+  e.preventDefault();
+  if (f.dataset.confirm && !window.confirm(f.dataset.confirm)) return;
+  const fd = new FormData(f), v = Object.fromEntries(fd.entries()), id = f.dataset.id ? +f.dataset.id : null;
+  const btn = e.submitter;
+  switch (f.dataset.form) {
+    case 'check': {
+      const rows = [...f.querySelectorAll('.check-row')].map(r => {
+        const sid = r.dataset.sid;
+        const at = r.querySelector(`input[name="att_${sid}"]:checked`), hw = r.querySelector(`input[name="hw_${sid}"]:checked`);
+        return { sid: +sid, status: at ? at.value : '', hw: hw ? hw.value : '' };
+      });
+      call('saveCheck', { date: f.dataset.date, class_id: +f.dataset.cid, rows, rest: !!(btn && btn.name === 'rest'),
+        lesson: { progress: v.progress || '', homework: v.homework || '', memo: v.memo || '' } });
+      break;
+    }
+    case 'mk-plan': call('makeupAction', id, 'plan', v); break;
+    case 'mk-done': call('makeupAction', id, 'done', v); break;
+    case 'mk-cancel': call('makeupAction', id, 'cancel', v); break;
+    case 'mk-reason': call('makeupAction', id, 'reason', v); break;
+    case 'mk-new': call('makeupNew', v); break;
+    case 'stu-search': go('students', { q: v.q, status: v.status, grade: S.p.grade || '' }, true); break;
+    case 'student': call('saveStudent', Object.assign(v, { id })).then(r => go('student', { id: r.id }, true)); break;
+    case 'note': call('setNote', id, v.memo); break;
+    case 'fee-sheet': call('saveFeeSheet', [...f.querySelectorAll('.sheet-row')].map(r => ({
+      id: +r.dataset.sid, fee: r.querySelector('[name=fee]').value, memo: r.querySelector('[name=memo]').value,
+      gender: (r.querySelector('input[name^="gender_"]:checked') || {}).value || '' }))); break;
+    case 'fee-all': call('setFeeAll', v.amount); break;
+    case 'score': call('addScore', Object.assign(v, { student_id: id })); break;
+    case 'consult': call('addConsult', Object.assign(v, { student_id: id })); break;
+    case 'pay': call('tuitionAction', id, 'pay', { method: v.method, paid_date: v.paid_date || D.today }); break;
+    case 'bill-method': call('tuitionAction', id, 'method', v); break;
+    case 'bill-amount': call('tuitionAction', id, 'amount', v); break;
+    case 'bill-add': call('addBill', Object.assign(v, { month: f.dataset.month })); break;
+    case 'expense': call('addExpense', v); break;
+    case 'class': call('saveClass', { id, name: v.name, start: v.start, end: v.end, days: fd.getAll('days') }); break;
+    case 'settings': call('saveSettings', v); break;
+  }
+});
+
+
+// ================= 좌우로 밀어서 메뉴 이동 (휴대폰) =================
+// 아래 메뉴 순서(홈→출석→보강→학생→수강료)대로, 손가락을 따라 화면이 움직이다 놓으면 넘어간다.
+MAIN.addEventListener('input', e => { if (!e.target.closest('[data-form=stu-search]')) formDirty = true; });  // 검색칸은 저장할 입력이 아니다
+MAIN.addEventListener('change', e => { if (!e.target.closest('[data-nav], [data-form=stu-search]')) formDirty = true; });
+(() => {
+  let x0 = 0, y0 = 0, t0 = 0, dx = 0, lock = '', on = false;
+  const scrollsX = el => {
+    for (; el && el !== MAIN; el = el.parentElement) {
+      const o = getComputedStyle(el).overflowX;
+      if ((o === 'auto' || o === 'scroll') && el.scrollWidth > el.clientWidth + 2) return true;
+    }
+    return false;
+  };
+  const back = () => {
+    MAIN.style.transition = 'transform .2s ease-out';
+    MAIN.style.transform = '';
+  };
+  MAIN.addEventListener('touchstart', e => {
+    on = false;
+    if (e.touches.length !== 1 || ORDER.indexOf(S.view) < 0) return;
+    const t = e.touches[0];
+    if (t.clientX < 18 || t.clientX > innerWidth - 18) return;  // 화면 가장자리는 브라우저 뒤로가기 몸짓
+    if (e.target.closest('input[type=text], input:not([type]), input[type=number], input[type=date], textarea, select') || scrollsX(e.target)) return;
+    x0 = t.clientX; y0 = t.clientY; t0 = Date.now(); dx = 0; lock = ''; on = true;
+    document.getElementById('more').hidden = true;
+  }, { passive: true });
+  MAIN.addEventListener('touchmove', e => {
+    if (!on) return;
+    const t = e.touches[0], mx = t.clientX - x0, my = t.clientY - y0;
+    if (!lock) {
+      if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
+      lock = Math.abs(mx) > Math.abs(my) * 1.2 ? 'x' : 'y';
+      if (lock === 'y') { on = false; return; }
+    }
+    const i = ORDER.indexOf(S.view), edge = (mx > 0 && i === 0) || (mx < 0 && i === ORDER.length - 1);
+    dx = edge ? mx / 4 : mx;  // 처음·마지막 메뉴에서는 살짝만 끌린다
+    MAIN.style.transition = 'none';
+    MAIN.style.transform = `translateX(${dx}px)`;
+    if (e.cancelable) e.preventDefault();
+  }, { passive: false });
+  const end = () => {
+    if (!on || lock !== 'x') { on = false; return; }
+    on = false;
+    const i = ORDER.indexOf(S.view), j = i + (dx < 0 ? 1 : -1), fast = Math.abs(dx) / Math.max(1, Date.now() - t0) > 0.4;
+    if (j < 0 || j >= ORDER.length || !(Math.abs(dx) > innerWidth * 0.25 || (fast && Math.abs(dx) > 40))) return back();
+    const move = () => {
+      MAIN.style.transition = 'transform .14s ease-in, opacity .14s';
+      MAIN.style.transform = `translateX(${dx < 0 ? -60 : 60}%)`;
+      MAIN.style.opacity = '0';
+      setTimeout(() => go(ORDER[j]), 140);
+    };
+    if (formDirty) { back(); setTimeout(() => { if (window.confirm('저장하지 않은 입력이 있어요. 저장하지 않고 이동할까요?')) go(ORDER[j]); }, 220); }
+    else move();
+  };
+  MAIN.addEventListener('touchend', end);
+  MAIN.addEventListener('touchcancel', () => { if (on && lock === 'x') back(); on = false; });
+})();
+
+// 아이폰은 홈 화면 앱을 멈춘 채 들고 있다가 다시 보여 준다 → 1분 넘게 안 봤으면 새 데이터·오늘 날짜로 다시 그린다
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { hiddenAt = Date.now(); return; }
+  if (!hiddenAt || Date.now() - hiddenAt < 60000 || formDirty || !document.getElementById('busy').hidden) return;
+  google.script.run.withSuccessHandler(d => {
+    if (formDirty) return;  // 받는 사이에 입력을 시작했으면 건드리지 않는다
+    const y = MAIN.scrollTop; D = d; render(); MAIN.scrollTop = y;
+  }).getAll();
+});
+
+// 휴대폰 '뒤로' 버튼으로 앱 안에서 이전 화면으로
+try {
+  google.script.history.setChangeHandler(e => { if (e.state && e.state.view) { S = e.state; render(); } });
+  google.script.history.replace(S, null, 'home');
+} catch (e) { /* 무시 */ }
+render();
+</script>

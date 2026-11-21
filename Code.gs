@@ -128,7 +128,7 @@ function bootJson_() {
 // ---------------- 접근 제어 ----------------
 // 이 앱을 쓸 두 사람의 구글 계정. 배우자 계정을 실제 주소로 바꾸세요.
 // (setup 을 실행한 계정은 자동으로 추가됩니다)
-const USERS = ['friese8807@gmail.com', 'spouse@gmail.com'];
+const USERS = [];  // 공개 저장소라 주소를 적지 않는다. 주인 계정은 setup 때 스크립트 속성 ALLOWED_EMAILS 에 들어간다
 
 function allowedEmails_() {
   const extra = PropertiesService.getScriptProperties().getProperty('ALLOWED_EMAILS') || '';
@@ -518,11 +518,15 @@ function tuitionAction(id, action, p) {
   return run_('수강료 ' + action, db => {
     const b = db.get('tuition', id);
     db.touch('tuition');
-    if (action === 'pay') { b.paid_date = date_(p.paid_date, today_()); b.method = choice_(p.method, METHODS); return { msg: '납부 완료로 표시했어요' }; }
+    if (action === 'pay') { b.paid_date = date_(p.paid_date, today_()); b.method = choice_(p.method, METHODS); return { msg: b.method + (b.method === '현금' ? '으로' : '로') + ' 납부 완료 표시했어요' }; }
     if (action === 'unpay') { b.paid_date = ''; b.method = ''; b.receipt = ''; return { msg: '납부 표시를 취소했어요' }; }
     if (action === 'receipt') {
       if (!b.paid_date || ['계좌이체', '현금'].indexOf(b.method) < 0) throw new Error('계좌이체·현금으로 낸 수강료만 현금영수증 발급 표시를 할 수 있어요.');
       b.receipt = today_(); return { msg: '현금영수증 발급함으로 표시했어요' };
+    }
+    if (action === 'method') {
+      if (!b.paid_date) throw new Error('아직 안 낸 수강료예요.');
+      b.method = choice_(p.method, METHODS); return { msg: '납부 방법을 ' + b.method + (b.method === '현금' ? '으로' : '로') + ' 바꿨어요' };
     }
     if (action === 'unreceipt') { b.receipt = ''; return { msg: '발급 표시를 취소했어요' }; }
     if (action === 'amount') { b.amount = int_(p.amount); b.memo = str_(p.memo, 200); return {}; }
