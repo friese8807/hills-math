@@ -562,7 +562,11 @@ VIEWS.tuition = p => {
     });
     const G = k => board.filter(x => x.g === k);
     const total = G('미납').reduce((a, x) => a + x.unpaid.reduce((b, u) => b + u.amount, 0), 0);
+    const m = thisMonth(), got = D.tuition.filter(b => b.paid_date && b.paid_date.startsWith(m)).reduce((a, b) => a + b.amount, 0);
+    const billed = D.tuition.filter(b => b.month === m).reduce((a, b) => a + b.amount, 0), rate = billed ? Math.min(100, Math.round(got / billed * 100)) : 0;
     return `<div class="head"><h1>수강료 납부 현황</h1><a class="btn" href="#" data-go="feeSheet">✏️ 학생별 수강료 입력</a></div>${sub}
+    <section class="card tu-sum"><div class="tu-two"><div><span>${+m.slice(5)}월 받은 돈</span><b>${won(got)}</b></div><div><span>청구</span><b>${won(billed)}</b></div></div>
+      <div class="tu-bar"><i style="width:${rate}%"></i></div><div class="tu-rate">${rate}%</div></section>
     <div class="stats"><div class="stat ${G('미납').length ? 'warn' : ''}"><span>미납 학생</span><b>${G('미납').length}명</b></div>
       <div class="stat"><span>미납 금액</span><b>${won(total)}</b></div><div class="stat"><span>납부 완료</span><b>${G('납부').length}명</b></div></div>
     <section class="card mk-group g-wait"><h2>💸 아직 안 냈어요 <span class="badge red">${G('미납').length}명</span></h2>
