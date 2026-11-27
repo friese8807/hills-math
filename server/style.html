@@ -420,4 +420,46 @@ form .primary.sticky { width: 100%; z-index: 6; }
 .rc-done { display: flex; align-items: center; gap: .5rem; padding: .45rem 0; border-bottom: 1px solid var(--line); }
 .rc-done .grow { flex: 1; min-width: 0; }
 .more-list > summary { padding: .6rem 0; font-weight: 700; color: var(--primary); cursor: pointer; }
+/* ── 홈 (Canva 시안) ── */
+.hk-date{display:flex;align-items:center;justify-content:center;gap:.4rem;font-weight:800;font-size:1.05rem;margin:.1rem 0 .7rem}
+.hk-big{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;margin-bottom:.7rem}
+.hk-big a{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:.7rem .3rem .65rem;text-align:center;color:var(--text);box-shadow:var(--shadow)}
+.hk-big svg{width:24px;height:24px;stroke:var(--board);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.hk-big span{display:block;font-size:.8rem;font-weight:700;margin-top:.15rem}
+.hk-big b{display:block;font-size:1.35rem;font-weight:800;color:var(--board);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.hk-big b small{font-size:.8rem;margin-left:1px}
+@media (prefers-color-scheme:dark){.hk-big svg{stroke:var(--primary)}.hk-big b{color:var(--primary)}}
+.hk-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:.7rem .85rem;margin-bottom:.6rem;box-shadow:var(--shadow)}
+.hk-h{display:flex;align-items:center;gap:.4rem;font-weight:800;font-size:.92rem;margin-bottom:.45rem}
+.hk-h svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.hk-ax{position:relative;height:16px;font-size:.66rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.hk-ax span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+.hk-ax span:first-child{transform:none}.hk-ax span:last-child{transform:translateX(-100%)}
+.hk-line{position:relative;height:2px;background:var(--line);margin:.15rem 0 .5rem}
+.hk-line i{position:absolute;top:-3px;width:2px;height:8px;background:var(--line)}
+.hk-chips{position:relative;height:38px}
+.hk-chips a{position:absolute;transform:translateX(-50%);min-width:3.3rem;padding:.2rem .35rem;border-radius:8px;text-align:center;font-size:.68rem;line-height:1.25;font-weight:700;background:var(--soft-green);color:var(--board);white-space:nowrap}
+.hk-chips a small{display:block;font-weight:600;font-size:.6rem;opacity:.85}
+.hk-chips a.mk{background:var(--yellow);color:#4b3a00}
+.hk-chips a.done{background:var(--primary);color:#fff}
+@media (prefers-color-scheme:dark){.hk-chips a{color:#d9f0e2}}
+.hk-alert{display:flex;align-items:center;gap:.55rem;border-radius:12px;padding:.6rem .75rem;margin-bottom:.45rem;font-size:.86rem;font-weight:600;background:var(--soft-yellow);color:var(--text)}
+.hk-alert.r{background:var(--soft-red)}
+.hk-alert svg{flex:none;width:18px;height:18px;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;stroke:var(--orange)}
+.hk-alert.r svg{stroke:var(--red)}
+.hk-alert span{flex:1;min-width:0;word-break:keep-all}
+.hk-alert i{flex:none;font-style:normal;color:var(--muted);font-size:1.1rem}
+.hk-cls{display:grid;grid-template-columns:3rem 4.6rem 3.3rem 1fr 1.5rem;align-items:center;gap:.35rem;padding:.45rem 0;color:var(--text);font-size:.86rem;font-variant-numeric:tabular-nums}
+.hk-cls b{font-weight:800}
+.hk-cls .p{height:6px;border-radius:9px;background:var(--soft);overflow:hidden}
+.hk-cls .p i{display:block;height:100%;background:var(--board-2);border-radius:9px}
+.hk-cls .ck{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--muted);font-size:.7rem;font-weight:800}
+.hk-cls .ck.on{background:var(--board);color:#fff}
+.hk-go{display:flex;align-items:center;justify-content:center;gap:.45rem;width:100%;border-radius:14px;padding:.85rem;background:var(--board);color:#fff;font-weight:800;font-size:1rem;margin:.2rem 0 .6rem}
+@media (prefers-color-scheme:dark){.hk-go{background:var(--primary);color:#10231a}}
+/* 아래 탭바 줄 아이콘 (Canva 시안) */
+.bnav a span .bic{width:22px;height:22px;display:block;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.bnav a span{filter:none !important}
+.bnav a.on{color:var(--board)}
+@media (prefers-color-scheme:dark){.bnav a.on{color:var(--primary)}}
 </style>

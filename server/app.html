@@ -9,7 +9,12 @@ const WD = '일월화수목금토';
 const TABS = [['home', '홈'], ['check', '출석체크'], ['book', '출석부'], ['makeups', '보강'], ['students', '학생'],
   ['tuition', '수강료'], ['money', '지출·결산'], ['settings', '설정']];
 
-const BNAV = [['home', '🏠', '홈'], ['check', '✅', '출석'], ['makeups', '🔁', '보강'], ['students', '👧', '학생'], ['tuition', '💳', '수강료']];
+const BNAV = [['home', '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>', '홈'],
+  ['check', '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 3v3h8V3M8 12l3 3 5-6"/>', '출석'],
+  ['makeups', '<path d="M16.5 3.5l4 4L8 20H4v-4z"/><path d="M14 6l4 4"/>', '보강'],
+  ['students', '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.5a5 5 0 0 1 5.5 5"/>', '학생'],
+  ['tuition', '<circle cx="12" cy="12" r="9"/><path d="M7 9l2 7 3-6 3 6 2-7M6.5 12h11"/>', '수강료']];
+const BIC = p => '<svg class="bic" viewBox="0 0 24 24">' + p + '</svg>';
 const h = v => String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const won = n => Number(n || 0).toLocaleString('ko-KR') + '원';
@@ -134,8 +139,8 @@ function render() {
   // 휴대폰: 자주 쓰는 5개는 아래 탭바, 나머지는 '더보기'
   const moreTabs = ['book', 'money', 'settings'];
   document.getElementById('bnav').innerHTML = BNAV.map(([v, ic, t]) =>
-    `<a href="#" data-go="${v}" class="${tab === v ? 'on' : ''}"><span aria-hidden="true">${ic}</span>${t}</a>`).join('') +
-    `<a href="#" data-act="more" class="${moreTabs.includes(tab) ? 'on' : ''}"><span aria-hidden="true">☰</span>더보기</a>`;
+    `<a href="#" data-go="${v}" class="${tab === v ? 'on' : ''}"><span aria-hidden="true">${BIC(ic)}</span>${t}</a>`).join('') +
+    `<a href="#" data-act="more" class="${moreTabs.includes(tab) ? 'on' : ''}"><span aria-hidden="true">${BIC('<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>')}</span>더보기</a>`;
   document.getElementById('more').hidden = true;
   MAIN.innerHTML = (VIEWS[S.view] || VIEWS.home)(S.p);
   formDirty = false;
@@ -145,43 +150,40 @@ function render() {
 // ================= 화면들 =================
 const VIEWS = {};
 
-// ---------- 홈 ----------
+// ---------- 홈 (Canva 시안, 2026-11): 날짜 → 큰 숫자 3개 → 오늘 시간 막대 → 챙길 것 → 오늘 수업 → 출석체크 버튼 ----------
+const SV = { book: '<path d="M4 5a2 2 0 0 1 2-2h5v17H6a2 2 0 0 0-2 2z"/><path d="M20 5a2 2 0 0 0-2-2h-5v17h5a2 2 0 0 1 2 2z"/>',
+  pen: '<path d="M16.5 3.5l4 4L8 20H4v-4z"/><path d="M14 6l4 4"/>', won: '<circle cx="12" cy="12" r="9"/><path d="M7 9l2 7 3-6 3 6 2-7M6.5 12h11"/>',
+  cal: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/>', clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  warn: '<path d="M12 3.5l9 16H3z"/><path d="M12 10v4M12 17h.01"/>' };
+const sv = k => `<svg viewBox="0 0 24 24">${SV[k]}</svg>`;
+const toM = s => { const [a, b] = String(s || '0:0').split(':').map(Number); return a * 60 + (b || 0); };
 VIEWS.home = () => {
   const t = D.today, m = thisMonth();
-  const income = D.tuition.filter(b => b.paid_date && b.paid_date.startsWith(m)).reduce((a, b) => a + b.amount, 0);
-  const unpaid = D.tuition.filter(b => !b.paid_date && stu(b.student_id).id).sort((a, b) => a.month < b.month ? -1 : 1);
-  const mkOpen = D.makeups.filter(x => x.status === '대기' || x.status === '예정');
-  const todayCls = D.classes.filter(c => c.active && c.days.split(',').includes(wd(t)));
+  const cls = D.classes.filter(c => c.active && c.days.split(',').includes(wd(t))).sort((a, b) => a.start < b.start ? -1 : 1)
+    .map(c => { const mem = active().filter(s => s.class_id === c.id); return { c, mem, n: D.attendance.filter(a => a.class_id === c.id && a.date === t).length }; });
+  const kids = cls.reduce((n, x) => n + x.mem.length, 0);
+  const unpaid = D.tuition.filter(b => !b.paid_date && stu(b.student_id).id);
+  const mkOpen = D.makeups.filter(x => x.status === '대기' || x.status === '예정'), wait = D.makeups.filter(x => x.status === '대기');
   const planned = D.makeups.filter(x => x.status === '예정' && x.plan_date === t);
-  const wait = D.makeups.filter(x => x.status === '대기');
-  return `<h1>${+t.slice(5, 7)}월 ${+t.slice(8)}일 (${wd(t)})</h1>
-  <div class="stats">
-    <a class="stat" href="#" data-go="students"><span>재원생</span><b>${active().length}명</b></a>
-    <a class="stat" href="#" data-go="tuition"><span>${+m.slice(5)}월 수납</span><b>${won(income)}</b></a>
-    <a class="stat ${unpaid.length ? 'warn' : ''}" href="#" data-go="tuition"><span>미납</span><b>${unpaid.length}건</b></a>
-    <a class="stat ${wait.length ? 'warn' : ''}" href="#" data-go="makeups"><span>보강 남음</span><b>${mkOpen.length}건</b></a>
-  </div>
-  <section class="card"><h2>오늘 수업</h2>
-    ${todayCls.map(c => {
-      const mem = active().filter(s => s.class_id === c.id);
-      const n = D.attendance.filter(a => a.class_id === c.id && a.date === t).length;
-      return `<a class="row-link" href="#" data-go="check" data-date="${t}"><span class="time">${h(c.start)}</span>
-        <span class="grow"><b>${h(c.name)}</b></span><span class="badge ${n >= mem.length && mem.length ? 'green' : ''}">출결 ${n}/${mem.length}</span></a>`;
-    }).join('') || '<p class="muted">오늘 정규 수업이 없습니다.</p>'}
-    ${planned.map(x => `<div class="row"><span class="time">${h(x.plan_time) || '보강'}</span>
-      <span class="grow"><b>${h(stu(x.student_id).name)}</b> 보강 <small class="muted">${mdw(x.absent_date)} 결석분</small></span></div>`).join('')}
-    <p class="actions"><a class="btn primary" href="#" data-go="check">✅ 오늘 출석체크</a></p>
-  </section>
-  ${wait.length ? `<section class="card"><h2>보강 날짜를 잡아야 할 결석</h2>
-    ${wait.map(x => `<a class="row-link" href="#" data-go="makeups"><span class="time">${mdw(x.absent_date)}</span>
-      <span class="grow"><b>${h(stu(x.student_id).name)}</b> <small>${h(clsName(x.class_id))}</small></span><span class="badge red">날짜 미정</span></a>`).join('')}
-  </section>` : ''}
-  ${unpaid.length ? `<section class="card"><h2>미납 수강료</h2>
-    ${unpaid.slice(0, 5).map(b => `<div class="row"><span class="grow"><a href="#" data-go="student" data-id="${b.student_id}">${h(stu(b.student_id).name)}</a>
-      <small>${billLabel(b)}</small></span><span>${won(b.amount)}</span>
-      <button class="btn small ok-btn" data-act="pay" data-id="${b.id}">✔ 냈어요</button></div>`).join('')}
-    ${unpaid.length > 5 ? `<a class="more" href="#" data-go="tuition">미납 ${unpaid.length}건 모두 보기 ›</a>` : ''}
-  </section>` : ''}`;
+  const h0 = 13, h1 = 21, P = mm => ((mm - h0 * 60) / ((h1 - h0) * 60) * 100).toFixed(2);
+  const ax = [], ticks = []; for (let x = h0; x <= h1; x++) { ax.push(`<span style="left:${P(x * 60)}%">${x}시</span>`); ticks.push(`<i style="left:${P(x * 60)}%"></i>`); }
+  const chips = [...cls.map(x => ({ at: toM(x.c.start), h: `<a href="#" data-go="check" data-date="${t}" class="${x.n >= x.mem.length && x.mem.length ? 'done' : ''}" style="left:${P(toM(x.c.start))}%">${h(x.c.start)}<small>${h(x.c.name)}</small></a>` })),
+    ...planned.map(x => ({ at: toM(x.plan_time), h: `<a href="#" data-go="makeups" class="mk" style="left:${P(toM(x.plan_time))}%">${h(x.plan_time)}<small>보강</small></a>` }))].sort((a, b) => a.at - b.at);
+  // 칩이 겹치지 않게 최소 간격만큼 밀기
+  let last = -99; const out = chips.map(c => { let l = +P(c.at); if (l - last < 15) l = last + 15; last = l; return c.h.replace(/left:[\d.]+%/, 'left:' + Math.min(l, 92) + '%'); });
+  return `<div class="hk-date">${sv('cal').replace('<svg', '<svg style="width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2"')}${+t.slice(5, 7)}월 ${+t.slice(8)}일 (${wd(t)})</div>
+  <div class="hk-big">
+    <a href="#" data-go="check">${sv('book')}<span>오늘 수업</span><b>${cls.length}<small>반</small> · ${kids}<small>명</small></b></a>
+    <a href="#" data-go="makeups">${sv('pen')}<span>보강 남음</span><b>${mkOpen.length}<small>건</small></b></a>
+    <a href="#" data-go="tuition">${sv('won')}<span>미납</span><b>${unpaid.length}<small>건</small></b></a></div>
+  <div class="hk-card"><div class="hk-h">${sv('clock')}오늘 시간</div>
+    <div class="hk-ax">${ax.join('')}</div><div class="hk-line">${ticks.join('')}</div><div class="hk-chips">${out.join('')}</div></div>
+  ${wait.length ? `<a class="hk-alert" href="#" data-go="makeups">${sv('warn')}<span>보강 날짜 미정: ${wait.map(x => h(stu(x.student_id).name)).join(', ')}</span><i>›</i></a>` : ''}
+  ${unpaid.length ? `<a class="hk-alert r" href="#" data-go="tuition">${sv('warn')}<span>미납 ${unpaid.length}건 ${won(unpaid.reduce((a, x) => a + x.amount, 0))}</span><i>›</i></a>` : ''}
+  <div class="hk-card"><div class="hk-h">${sv('book')}오늘 수업</div>
+    ${cls.map(x => `<a class="hk-cls" href="#" data-go="check" data-date="${t}"><b>${h(x.c.start)}</b><b>${h(x.c.name)}</b><span>출결 ${x.n}/${x.mem.length}</span>
+      <span class="p"><i style="width:${x.mem.length ? Math.round(x.n / x.mem.length * 100) : 0}%"></i></span><span class="ck ${x.n >= x.mem.length && x.mem.length ? 'on' : ''}">✓</span></a>`).join('') || '<p class="muted">오늘 정규 수업이 없습니다.</p>'}</div>
+  <a class="hk-go" href="#" data-go="check">✏️ 오늘 출석체크</a>`;
 };
 
 // ---------- 출석체크 ----------
